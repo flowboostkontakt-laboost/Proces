@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(ls:*)",
+      "Bash(streamlit run:*)",
+      "Bash(git init:*)",
+      "Bash(echo # Proces:*)"
+    ]
+  }
+}
