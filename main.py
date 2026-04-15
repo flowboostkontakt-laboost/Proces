@@ -915,12 +915,6 @@ def populate_workbook(
     write_value(ws, CELL_MAP["fire_overview"], data.fire_overview, append=True)
     write_value(ws, CELL_MAP["fire_suitable"], data.fire_suitable, append=True)
     write_value(ws, CELL_MAP["fire_unsuitable"], data.fire_unsuitable, append=True)
-    for idx, line in enumerate(data.before_work[:8], start=1):
-        write_value(ws, CELL_MAP[f"before_work_{idx}"], line)
-    for idx, line in enumerate(data.during_work[:6], start=1):
-        write_value(ws, CELL_MAP[f"during_work_{idx}"], line)
-    for idx, line in enumerate(data.after_work[:2], start=1):
-        write_value(ws, CELL_MAP[f"after_work_{idx}"], line)
     write_value(ws, CELL_MAP["handling_1"], "\n".join(data.handling[:2]), append=True)
     write_value(ws, CELL_MAP["storage_1"], "\n".join(data.storage[:2]), append=True)
 
