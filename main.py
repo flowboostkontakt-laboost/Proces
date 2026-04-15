@@ -58,6 +58,7 @@ CELL_MAP = {
     "during_work_6": "C34",
     "after_work_1": "A36",
     "after_work_2": "A37",
+    "environmental_release": "A51",
     "handling_1": "A54",
     "storage_1": "A55",
 }
@@ -75,7 +76,7 @@ STATIC_IMAGE_ANCHORS = {
 
 HAZARD_IMAGE_ANCHORS = ["F11", "G11", "H11", "I11"]
 
-APPEND_CELLS = {"A41", "A42", "A43", "A44", "A48", "A49", "A50", "A54", "A55"}
+APPEND_CELLS = {"A41", "A42", "A43", "A44", "A48", "A49", "A50", "A51", "A54", "A55"}
 
 
 GHS_LABELS = {
@@ -169,6 +170,7 @@ class ExtractedData:
     fire_overview: str = ""
     fire_suitable: str = ""
     fire_unsuitable: str = ""
+    environmental_release: str = ""
     before_work: list[str] | None = None
     during_work: list[str] | None = None
     after_work: list[str] | None = None
@@ -477,6 +479,29 @@ def extract_fire_data(text: str) -> dict[str, str]:
     }
 
 
+def extract_environmental_release(text: str) -> str:
+    section6 = section_slice(
+        text,
+        [r"SEKCJA 6: Postępowanie w przypadku niezamierzonego uwolnienia do środowiska"],
+        [r"SEKCJA 7"],
+    )
+    if not section6:
+        return ""
+    subsection = section_slice(
+        section6,
+        [
+            r"6\.3[.\s]+Metody i materiałów zapobiegających",
+            r"6\.3[.\s]+Metody i materiały zapobiegające",
+            r"6\.3[.\s]+",
+        ],
+        [r"6\.4[.\s]+", r"SEKCJA 7"],
+    )
+    lines = subsection.splitlines()
+    if lines and re.match(r"6\.3[.\s]", lines[0]):
+        lines = lines[1:]
+    return normalize_text("\n".join(lines))
+
+
 def extract_protection(text: str) -> dict[str, str]:
     block = section_slice(text, [r"8\.2[.\s]+Kontrola narażenia", r"8\.2[.\s]+Kontrola narazenia"], [r"SEKCJA 9"])
     if not block:
@@ -688,6 +713,7 @@ def extract_data(pdf_path: Path) -> ExtractedData:
         fire_overview=fire.get("overview", ""),
         fire_suitable=fire.get("suitable", ""),
         fire_unsuitable=fire.get("unsuitable", ""),
+        environmental_release=extract_environmental_release(text),
         before_work=work.get("before_work", []),
         during_work=list(work.get("during_work", [])),
         after_work=work.get("after_work", []),
@@ -915,9 +941,11 @@ def populate_workbook(
     write_value(ws, CELL_MAP["fire_overview"], data.fire_overview, append=True)
     write_value(ws, CELL_MAP["fire_suitable"], data.fire_suitable, append=True)
     write_value(ws, CELL_MAP["fire_unsuitable"], data.fire_unsuitable, append=True)
+    write_value(ws, CELL_MAP["environmental_release"], data.environmental_release, append=True)
     write_value(ws, CELL_MAP["handling_1"], "\n".join(data.handling[:2]), append=True)
     write_value(ws, CELL_MAP["storage_1"], "\n".join(data.storage[:2]), append=True)
 
+    ws._images = []
     static_assets = resolve_static_assets(assets_dir=assets_dir, temp_images_dir=temp_images_dir)
     for key, anchor in STATIC_IMAGE_ANCHORS.items():
         add_image(ws, static_assets.get(key, Path()), anchor, width=42, height=42)
