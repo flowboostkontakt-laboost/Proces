@@ -39,6 +39,7 @@ CELL_MAP = {
     "first_aid_skin": "A42",
     "first_aid_eyes": "A43",
     "first_aid_ingestion": "A44",
+    "first_aid_general": "A40",
     "fire_overview": "A48",
     "fire_suitable": "A49",
     "fire_unsuitable": "A50",
@@ -76,7 +77,7 @@ STATIC_IMAGE_ANCHORS = {
 
 HAZARD_IMAGE_ANCHORS = ["F11", "G11", "H11", "I11"]
 
-APPEND_CELLS = {"A41", "A42", "A43", "A44", "A48", "A49", "A50", "A51", "A54", "A55"}
+APPEND_CELLS = {"A40", "A41", "A42", "A43", "A44", "A48", "A49", "A50", "A51", "A54", "A55"}
 
 
 GHS_LABELS = {
@@ -167,6 +168,7 @@ class ExtractedData:
     first_aid_skin: str = ""
     first_aid_eyes: str = ""
     first_aid_ingestion: str = ""
+    first_aid_general: str = ""
     fire_overview: str = ""
     fire_suitable: str = ""
     fire_unsuitable: str = ""
@@ -450,6 +452,23 @@ def extract_first_aid(text: str) -> dict[str, str]:
     }
 
 
+def extract_first_aid_general(text: str) -> str:
+    section = section_slice(
+        text,
+        [
+            r"4\.2[.\s]+Najważniejsze ostre i opóźnione objawy",
+            r"4\.2[.\s]+Najwazniejsze ostre i opoznione objawy",
+        ],
+        [r"4\.3[.\s]+", r"SEKCJA 5"],
+    )
+    if not section:
+        return ""
+    lines = section.splitlines()
+    if lines and re.match(r"4\.2[.\s]", lines[0]):
+        lines = lines[1:]
+    return normalize_text("\n".join(lines))
+
+
 def extract_fire_data(text: str) -> dict[str, str]:
     section = section_slice(text, [r"SEKCJA 5: Postępowanie w przypadku pożaru"], [r"SEKCJA 6"])
     sub = section_slice(section or text, [r"5\.1[.\s]+Środki gaśnicze"], [r"5\.2[.\s]+", r"5\.3[.\s]+", r"SEKCJA 6"])
@@ -710,6 +729,7 @@ def extract_data(pdf_path: Path) -> ExtractedData:
         first_aid_skin=first_aid.get("skin", ""),
         first_aid_eyes=first_aid.get("eyes", ""),
         first_aid_ingestion=first_aid.get("ingestion", ""),
+        first_aid_general=extract_first_aid_general(text),
         fire_overview=fire.get("overview", ""),
         fire_suitable=fire.get("suitable", ""),
         fire_unsuitable=fire.get("unsuitable", ""),
@@ -934,6 +954,7 @@ def populate_workbook(
     write_value(ws, CELL_MAP["respiratory_protection"], data.respiratory_protection)
     write_value(ws, CELL_MAP["skin_protection"], data.skin_protection)
     write_value(ws, CELL_MAP["eye_protection"], data.eye_protection)
+    write_value(ws, CELL_MAP["first_aid_general"], data.first_aid_general, append=True)
     write_value(ws, CELL_MAP["first_aid_inhalation"], data.first_aid_inhalation, append=True)
     write_value(ws, CELL_MAP["first_aid_skin"], data.first_aid_skin, append=True)
     write_value(ws, CELL_MAP["first_aid_eyes"], data.first_aid_eyes, append=True)
