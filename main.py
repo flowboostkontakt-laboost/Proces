@@ -10,6 +10,8 @@ from typing import Iterable
 
 import pdfplumber
 from openpyxl import load_workbook
+from openpyxl.cell.rich_text import CellRichText, TextBlock
+from openpyxl.cell.text import InlineFont
 from openpyxl.drawing.image import Image
 from PIL import UnidentifiedImageError
 
@@ -56,8 +58,8 @@ CELL_MAP = {
     "during_work_6": "C34",
     "after_work_1": "A36",
     "after_work_2": "A37",
-    "storage_1": "A54",
-    "storage_2": "A55",
+    "handling_1": "A54",
+    "storage_1": "A55",
 }
 
 
@@ -72,6 +74,8 @@ STATIC_IMAGE_ANCHORS = {
 }
 
 HAZARD_IMAGE_ANCHORS = ["F11", "G11", "H11", "I11"]
+
+APPEND_CELLS = {"A41", "A42", "A43", "A44", "A48", "A49", "A50", "A54", "A55"}
 
 
 GHS_LABELS = {
@@ -169,6 +173,7 @@ class ExtractedData:
     during_work: list[str] | None = None
     after_work: list[str] | None = None
     storage: list[str] | None = None
+    handling: list[str] | None = None
 
     def __post_init__(self) -> None:
         self.hazard_codes = self.hazard_codes or []
@@ -177,6 +182,7 @@ class ExtractedData:
         self.during_work = self.during_work or []
         self.after_work = self.after_work or []
         self.storage = self.storage or []
+        self.handling = self.handling or []
 
 
 def normalize_text(text: str) -> str:
@@ -650,6 +656,7 @@ def extract_work_instructions(text: str) -> dict[str, list[str] | str]:
         "before_work": before_work[:8],
         "during_work": during_work[:6],
         "after_work": after_work[:2],
+        "handling": handling_lines[:2],
         "storage": storage_lines[:2],
     }
 
@@ -685,6 +692,7 @@ def extract_data(pdf_path: Path) -> ExtractedData:
         during_work=list(work.get("during_work", [])),
         after_work=work.get("after_work", []),
         storage=work.get("storage", []),
+        handling=work.get("handling", []),
     )
 
 
@@ -756,15 +764,67 @@ def add_image(ws, image_path: Path, anchor: str, width: int | None = None, heigh
     ws.add_image(img)
 
 
-def write_value(ws, address: str, value: str) -> None:
+def _strip_placeholder(value: str | None) -> str | None:
+    if not value:
+        return value
+    return re.sub(r"\s*z\s+pkt\.?\s*\d+(?:\.\d+)?\s*KCH", "", value, flags=re.IGNORECASE).strip()
+
+
+def _combine_value(existing, new: str) -> str:
+    parts = [p for p in (existing, new) if p]
+    return "\n".join(parts)
+
+
+def _get_merged_parent_value(ws, address: str) -> str | None:
+    for merged_range in ws.merged_cells.ranges:
+        if address in merged_range:
+            parent = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+            return parent.value
+    return None
+
+
+def _is_bold(cell) -> bool:
+    return bool(cell.font and cell.font.bold)
+
+
+def _rich_append(existing: str | None, new: str) -> CellRichText:
+    parts: list[TextBlock] = []
+    if existing:
+        header_font = InlineFont(b=True)
+        header_font.rFont = "Arial"
+        parts.append(TextBlock(header_font, existing))
+    if new:
+        prefix = "\n" if existing else ""
+        body_font = InlineFont(b=False)
+        body_font.rFont = "Arial"
+        parts.append(TextBlock(body_font, prefix + new))
+    return CellRichText(*parts)
+
+
+def write_value(ws, address: str, value: str, append: bool = False) -> None:
     target = ws[address]
     if target.__class__.__name__ == "MergedCell":
         for merged_range in ws.merged_cells.ranges:
             if address in merged_range:
-                cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col, value=value)
+                cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                if append:
+                    parent_value = _strip_placeholder(cell.value)
+                    if _is_bold(cell) and (parent_value or value):
+                        cell.value = _rich_append(parent_value, value)
+                    else:
+                        cell.value = _combine_value(parent_value, value)
+                else:
+                    cell.value = value
                 ensure_visible_style(cell)
                 return
-    target.value = value
+    if append:
+        existing = _strip_placeholder(target.value)
+        if _is_bold(target) and (existing or value):
+            target.value = _rich_append(existing, value)
+        else:
+            target.value = _combine_value(existing, value)
+    else:
+        target.value = value
     ensure_visible_style(target)
 
 
@@ -848,21 +908,21 @@ def populate_workbook(
     write_value(ws, CELL_MAP["respiratory_protection"], data.respiratory_protection)
     write_value(ws, CELL_MAP["skin_protection"], data.skin_protection)
     write_value(ws, CELL_MAP["eye_protection"], data.eye_protection)
-    write_value(ws, CELL_MAP["first_aid_inhalation"], data.first_aid_inhalation)
-    write_value(ws, CELL_MAP["first_aid_skin"], data.first_aid_skin)
-    write_value(ws, CELL_MAP["first_aid_eyes"], data.first_aid_eyes)
-    write_value(ws, CELL_MAP["first_aid_ingestion"], data.first_aid_ingestion)
-    write_value(ws, CELL_MAP["fire_overview"], data.fire_overview)
-    write_value(ws, CELL_MAP["fire_suitable"], data.fire_suitable)
-    write_value(ws, CELL_MAP["fire_unsuitable"], data.fire_unsuitable)
+    write_value(ws, CELL_MAP["first_aid_inhalation"], data.first_aid_inhalation, append=True)
+    write_value(ws, CELL_MAP["first_aid_skin"], data.first_aid_skin, append=True)
+    write_value(ws, CELL_MAP["first_aid_eyes"], data.first_aid_eyes, append=True)
+    write_value(ws, CELL_MAP["first_aid_ingestion"], data.first_aid_ingestion, append=True)
+    write_value(ws, CELL_MAP["fire_overview"], data.fire_overview, append=True)
+    write_value(ws, CELL_MAP["fire_suitable"], data.fire_suitable, append=True)
+    write_value(ws, CELL_MAP["fire_unsuitable"], data.fire_unsuitable, append=True)
     for idx, line in enumerate(data.before_work[:8], start=1):
         write_value(ws, CELL_MAP[f"before_work_{idx}"], line)
     for idx, line in enumerate(data.during_work[:6], start=1):
         write_value(ws, CELL_MAP[f"during_work_{idx}"], line)
     for idx, line in enumerate(data.after_work[:2], start=1):
         write_value(ws, CELL_MAP[f"after_work_{idx}"], line)
-    for idx, line in enumerate(data.storage[:2], start=1):
-        write_value(ws, CELL_MAP[f"storage_{idx}"], line)
+    write_value(ws, CELL_MAP["handling_1"], "\n".join(data.handling[:2]), append=True)
+    write_value(ws, CELL_MAP["storage_1"], "\n".join(data.storage[:2]), append=True)
 
     static_assets = resolve_static_assets(assets_dir=assets_dir, temp_images_dir=temp_images_dir)
     for key, anchor in STATIC_IMAGE_ANCHORS.items():
