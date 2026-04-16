@@ -1,3 +1,4 @@
+import io
 from pathlib import Path
 
 import streamlit as st
@@ -18,22 +19,36 @@ from main import (
 
 st.set_page_config(page_title="Generator Instrukcji BHP", layout="centered")
 st.title("Generator Instrukcji BHP")
-st.markdown("Wybierz pliki PDF do przetworzenia, a następnie kliknij **Generuj instrukcje**.")
 
 INPUT_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-pdfs = list_input_pdfs()
+uploaded_files = st.file_uploader(
+    "Wgraj pliki PDF z kartami charakterystyki",
+    type="pdf",
+    accept_multiple_files=True,
+)
 
-if not pdfs:
-    st.warning("Brak plików PDF w folderach **DANE_WEJSCIOWE** ani **DOCS**.")
+source_pdfs: list[Path] = []
+if uploaded_files:
+    for up in uploaded_files:
+        pdf_path = INPUT_DIR / up.name
+        with open(pdf_path, "wb") as f:
+            f.write(up.getbuffer())
+        source_pdfs.append(pdf_path)
+else:
+    source_pdfs = list_input_pdfs()
+
+if not source_pdfs:
+    st.warning("Brak plików PDF. Wgraj pliki powyżej lub umieść je w folderze **DANE_WEJSCIOWE** / **DOCS**.")
     st.stop()
 
 st.subheader("Wybierz pliki do wygenerowania")
 selected: list[Path] = []
-for pdf in pdfs:
-    rel = str(pdf.relative_to(BASE_DIR))
-    if st.checkbox(rel, value=True, key=rel):
+for pdf in source_pdfs:
+    rel = str(pdf.relative_to(BASE_DIR)) if BASE_DIR in pdf.parents else pdf.name
+    key = f"pdf_{pdf.name}"
+    if st.checkbox(rel, value=True, key=key):
         selected.append(pdf)
 
 if not selected:
@@ -63,15 +78,17 @@ if st.button("Generuj instrukcje"):
         progress.progress((i + 1) / total, text=f"Przetworzono {pdf_path.name}")
 
     progress.empty()
-    st.success(f"Wygenerowano {len(generated_files)} plików w folderze **GOTOWE_INSTRUKCJE**.")
+    st.success(f"Wygenerowano {len(generated_files)} plików.")
 
 if generated_files:
     st.subheader("Gotowe instrukcje do pobrania")
-    for path in generated_files:
+    cols = st.columns(2)
+    for idx, path in enumerate(generated_files):
         with open(path, "rb") as f:
-            st.download_button(
+            cols[idx % 2].download_button(
                 label=f"Pobierz {path.name}",
                 data=f,
                 file_name=path.name,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"dl_{path.name}",
             )

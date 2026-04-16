@@ -13,6 +13,8 @@ from openpyxl import load_workbook
 from openpyxl.cell.rich_text import CellRichText, TextBlock
 from openpyxl.cell.text import InlineFont
 from openpyxl.drawing.image import Image
+from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+from openpyxl.drawing.xdr import XDRPositiveSize2D
 from PIL import UnidentifiedImageError
 
 
@@ -795,7 +797,13 @@ def resolve_static_assets(assets_dir: Path | None = None, temp_images_dir: Path 
     return resolved
 
 
-def add_image(ws, image_path: Path, anchor: str, width: int | None = None, height: int | None = None) -> None:
+def add_image(
+    ws,
+    image_path: Path,
+    anchor: str | OneCellAnchor,
+    width: int | None = None,
+    height: int | None = None,
+) -> None:
     if not image_path.exists():
         return
     try:
@@ -934,6 +942,82 @@ def set_row_heights(ws) -> None:
         ws.row_dimensions[row_idx].height = height
 
 
+def _col_width_px(ws, col_letter: str) -> int:
+    w = ws.column_dimensions[col_letter].width
+    if w is None:
+        return 64
+    return int(w * 7 + 5)
+
+
+def _row_height_px(ws, row_num: int) -> int:
+    h = ws.row_dimensions[row_num].height
+    if h is None:
+        return 16
+    return int(h * 4 / 3)
+
+
+def layout_ghs_images(ws, pictograms: list[str]) -> list[tuple[str, OneCellAnchor | str, int]]:
+    """Return (code, anchor, size_px) list fitted into the F11:I14 area."""
+    n = len(pictograms)
+    if n == 0:
+        return []
+
+    area_cols = ["F", "G", "H", "I"]
+    area_rows = [11, 12, 13, 14]
+    col_widths = [_col_width_px(ws, c) for c in area_cols]
+
+    # Ignore very narrow columns when calculating layout
+    effective_col_indices = [i for i, w in enumerate(col_widths) if w >= 20]
+    effective_widths = [col_widths[i] for i in effective_col_indices]
+    effective_count = len(effective_col_indices)
+
+    total_width = sum(effective_widths)
+    total_height = sum(_row_height_px(ws, r) for r in area_rows)
+
+    if n <= 4:
+        size = min(52, total_height)
+        anchors = ["F11", "G11", "H11", "I11"]
+        return [(code, anchors[i], size) for i, code in enumerate(pictograms)]
+
+    best_size = 0
+    best_cols = effective_count
+    best_rows = (n + effective_count - 1) // effective_count
+
+    for cols in range(1, effective_count + 1):
+        rows = (n + cols - 1) // cols
+        if rows > len(area_rows):
+            continue
+        cell_w = total_width // cols
+        cell_h = total_height // rows
+        size = min(cell_w, cell_h, min(effective_widths[:cols]))
+        if size > best_size:
+            best_size = size
+            best_cols = cols
+            best_rows = rows
+
+    slot_w = total_width // best_cols
+    slot_h = total_height // best_rows
+    result: list[tuple[str, OneCellAnchor | str, int]] = []
+
+    for i, code in enumerate(pictograms):
+        col = i % best_cols
+        row = i // best_cols
+
+        actual_col_idx = effective_col_indices[col]
+        x_pad = max(0, (slot_w - best_size) // 2)
+        x_pad = min(x_pad, col_widths[actual_col_idx] - best_size)
+        x_off = sum(col_widths[:actual_col_idx]) + x_pad
+        y_off = row * slot_h + max(0, (slot_h - best_size) // 2)
+
+        anchor = OneCellAnchor(
+            _from=AnchorMarker(col=5, colOff=x_off * 9525, row=10, rowOff=y_off * 9525),
+            ext=XDRPositiveSize2D(cx=best_size * 9525, cy=best_size * 9525),
+        )
+        result.append((code, anchor, best_size))
+
+    return result
+
+
 def populate_workbook(
     data: ExtractedData,
     output_path: Path,
@@ -966,18 +1050,19 @@ def populate_workbook(
     write_value(ws, CELL_MAP["handling_1"], "\n".join(data.handling[:2]), append=True)
     write_value(ws, CELL_MAP["storage_1"], "\n".join(data.storage[:2]), append=True)
 
+    set_row_heights(ws)
+
     ws._images = []
     static_assets = resolve_static_assets(assets_dir=assets_dir, temp_images_dir=temp_images_dir)
     for key, anchor in STATIC_IMAGE_ANCHORS.items():
         add_image(ws, static_assets.get(key, Path()), anchor, width=42, height=42)
 
     ghs_assets = resolve_ghs_assets(assets_dir=assets_dir)
-    for anchor, code in zip(HAZARD_IMAGE_ANCHORS, data.hazard_pictograms):
+    for code, anchor, size in layout_ghs_images(ws, data.hazard_pictograms):
         asset = ghs_assets.get(code)
         if asset:
-            add_image(ws, asset, anchor, width=52, height=52)
+            add_image(ws, asset, anchor, width=size, height=size)
 
-    set_row_heights(ws)
     wb.save(output_path)
     wb.close()
 
