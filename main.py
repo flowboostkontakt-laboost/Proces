@@ -956,64 +956,52 @@ def _row_height_px(ws, row_num: int) -> int:
     return int(h * 4 / 3)
 
 
-def layout_ghs_images(ws, pictograms: list[str]) -> list[tuple[str, OneCellAnchor | str, int]]:
-    """Return (code, anchor, size_px) list fitted into the F11:I14 area."""
+def layout_ghs_images(ws, pictograms: list[str]) -> list[tuple[str, OneCellAnchor, int]]:
+    """Return (code, anchor, size_px) list fitted into F11:G14 (max 2 cols).
+    Images never overlap and stay fully inside their cells."""
     n = len(pictograms)
     if n == 0:
         return []
 
-    area_cols = ["F", "G", "H", "I"]
+    area_cols = ["F", "G"]
     area_rows = [11, 12, 13, 14]
+
+    for c in area_cols:
+        ws.column_dimensions[c].width = 13.0
+
     col_widths = [_col_width_px(ws, c) for c in area_cols]
+    row_heights = [_row_height_px(ws, r) for r in area_rows]
+    total_width = sum(col_widths)
+    total_height = sum(row_heights)
 
-    # Ignore very narrow columns when calculating layout
-    effective_col_indices = [i for i, w in enumerate(col_widths) if w >= 20]
-    effective_widths = [col_widths[i] for i in effective_col_indices]
-    effective_count = len(effective_col_indices)
+    if n <= 2:
+        cols = n
+        rows = 1
+    else:
+        cols = 2
+        rows = (n + 1) // 2
 
-    total_width = sum(effective_widths)
-    total_height = sum(_row_height_px(ws, r) for r in area_rows)
+    slot_w = total_width // cols
+    slot_h = total_height // rows
+    size = min(slot_w, slot_h, 52)
+    size = max(size, 24)
 
-    if n <= 4:
-        size = min(52, total_height)
-        anchors = ["F11", "G11", "H11", "I11"]
-        return [(code, anchors[i], size) for i, code in enumerate(pictograms)]
-
-    best_size = 0
-    best_cols = effective_count
-    best_rows = (n + effective_count - 1) // effective_count
-
-    for cols in range(1, effective_count + 1):
-        rows = (n + cols - 1) // cols
-        if rows > len(area_rows):
-            continue
-        cell_w = total_width // cols
-        cell_h = total_height // rows
-        size = min(cell_w, cell_h, min(effective_widths[:cols]))
-        if size > best_size:
-            best_size = size
-            best_cols = cols
-            best_rows = rows
-
-    slot_w = total_width // best_cols
-    slot_h = total_height // best_rows
-    result: list[tuple[str, OneCellAnchor | str, int]] = []
-
+    result: list[tuple[str, OneCellAnchor, int]] = []
     for i, code in enumerate(pictograms):
-        col = i % best_cols
-        row = i // best_cols
-
-        actual_col_idx = effective_col_indices[col]
-        x_pad = max(0, (slot_w - best_size) // 2)
-        x_pad = min(x_pad, col_widths[actual_col_idx] - best_size)
-        x_off = sum(col_widths[:actual_col_idx]) + x_pad
-        y_off = row * slot_h + max(0, (slot_h - best_size) // 2)
-
+        col = i % cols
+        row = i // cols
+        x_pad = max(0, (col_widths[col] - size) // 2)
+        y_pad = max(0, (row_heights[row] - size) // 2)
         anchor = OneCellAnchor(
-            _from=AnchorMarker(col=5, colOff=x_off * 9525, row=10, rowOff=y_off * 9525),
-            ext=XDRPositiveSize2D(cx=best_size * 9525, cy=best_size * 9525),
+            _from=AnchorMarker(
+                col=5 + col,
+                colOff=x_pad * 9525,
+                row=10 + row,
+                rowOff=y_pad * 9525,
+            ),
+            ext=XDRPositiveSize2D(cx=size * 9525, cy=size * 9525),
         )
-        result.append((code, anchor, best_size))
+        result.append((code, anchor, size))
 
     return result
 
