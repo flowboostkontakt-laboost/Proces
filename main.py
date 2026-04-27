@@ -180,6 +180,8 @@ class ExtractedData:
     after_work: list[str] | None = None
     storage: list[str] | None = None
     handling: list[str] | None = None
+    # NDS (Najwyższe dopuszczalne stężenie) exposure limit description from sekcja 8.1
+    nds: str = ""
 
     def __post_init__(self) -> None:
         self.hazard_codes = self.hazard_codes or []
@@ -305,7 +307,12 @@ def extract_hazard_section(text: str) -> tuple[str, list[str], list[str]]:
         return "", [], []
 
     pictogram_codes = sorted(set(re.findall(r"\bGHS0[1-9]\b", section2)))
-    compact = compact_text(section2)
+    # restrict hazard extraction to labeling subsection (2.2) to avoid classification duplicates
+    label_section = section_slice(
+        section2,
+        [r"2\\.2[.\\s]+"],
+        [r"2\\.3[.\\s]+", r"SEKCJA 3"]
+    )
 
     hazard_block = capture_first(
         section2,
@@ -314,7 +321,8 @@ def extract_hazard_section(text: str) -> tuple[str, list[str], list[str]]:
             r"Zwrot określający zagrożenie\s*:?\s*(.+?)\s*Zwrot określający środki",
         ],
     )
-    search_text = compact_text(hazard_block or compact)
+    # focus on labeling text only
+    search_text = compact_text(hazard_block or label_section)
 
     matches = re.findall(
         r"((?:EUH|H)\d{3}\s*[-–:]?\s*.+?)(?=(?:\b(?:EUH|H)\d{3}\b)|(?:\bP\d{3}\b)|$)",
@@ -330,12 +338,9 @@ def extract_hazard_section(text: str) -> tuple[str, list[str], list[str]]:
 
     codes = sorted(set(re.findall(r"\bH\d{3}\b", " ".join(hazard_lines))))
 
-    pictograms: set[str] = set(pictogram_codes)
-    for code in codes:
-        pictograms.update(H_TO_GHS.get(code, set()))
-
+    # Only include GHS pictograms explicitly present in section (no H-to-GHS mapping)
     hazard_text = "\n".join(line for line in hazard_lines if line)
-    return hazard_text, codes, sorted(pictograms)
+    return hazard_text, codes, pictogram_codes
 
 
 def extract_subsection(section_text: str, labels: list[str], next_labels: list[str]) -> str:
@@ -576,6 +581,29 @@ def extract_protection(text: str) -> dict[str, str]:
         "skin": skin,
         "eyes": eyes,
     }
+ 
+def extract_nds(text: str) -> str:
+    # Extract NDS (exposure limit) block from sekcja 8.1 up to 8.2
+    # slice from section 8.1 to 8.2
+    section = section_slice(text, [r"8\.1[.\s]+.*"], [r"8\.2"])
+    if not section:
+        return ""
+    # Look for line containing typical units or 'NDS'
+    for line in section.splitlines():
+        if "mg/m3" in line or "mg/m³" in line or "NDS" in line:
+            # normalize and strip leading label up to first colon
+            val = normalize_text(line)
+            if ':' in val:
+                val = val.split(':', 1)[1].strip()
+            return val
+    # Fallback: first non-empty line
+    for line in section.splitlines():
+        if line.strip():
+            val = normalize_text(line)
+            if ':' in val:
+                val = val.split(':', 1)[1].strip()
+            return val
+    return ""
 
 
 def extract_work_instructions(text: str) -> dict[str, list[str] | str]:
@@ -715,6 +743,8 @@ def extract_data(pdf_path: Path) -> ExtractedData:
     fire = extract_fire_data(text)
     protection = extract_protection(text)
     work = extract_work_instructions(text)
+    # extract NDS (exposure limit) description from section 8.1
+    nds_text = extract_nds(text)
 
     return ExtractedData(
         product_name=extract_product_name(text),
@@ -741,6 +771,7 @@ def extract_data(pdf_path: Path) -> ExtractedData:
         after_work=work.get("after_work", []),
         storage=work.get("storage", []),
         handling=work.get("handling", []),
+        nds=nds_text,
     )
 
 
@@ -1062,6 +1093,13 @@ def populate_workbook(
         asset = ghs_assets.get(code)
         if asset:
             add_image(ws, asset, anchor, width=size, height=size)
+
+    # add separate sheet for NDS (exposure limit) from section 8.1
+    nds_ws = wb.create_sheet(title="NDS")
+    # use extracted NDS text directly
+    nds_value = data.nds or ""
+    nds_ws["A1"] = nds_value
+    ensure_visible_style(nds_ws["A1"])
 
     wb.save(output_path)
     wb.close()
