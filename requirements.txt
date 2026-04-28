@@ -2,7 +2,4 @@ pdfplumber
 openpyxl
 Pillow
 streamlit
-openpyxl
-pdfplumber
-Pillow
-streamlit
+pymupdf

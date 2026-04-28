@@ -62,7 +62,13 @@ if st.button("Generuj instrukcje"):
     total = len(selected)
 
     for i, pdf_path in enumerate(selected):
-        data = extract_data(pdf_path)
+        try:
+            data = extract_data(pdf_path)
+        except Exception as exc:
+            st.error(f"Błąd przy {pdf_path.name}: {exc}")
+            progress.progress((i + 1) / total, text=f"Błąd: {pdf_path.name}")
+            continue
+
         product = data.product_name or pdf_path.stem
         output_name = f"Instrukcja_BHP_{sanitize_filename(product)}.xlsx"
         output_path = OUTPUT_DIR / output_name
@@ -78,7 +84,10 @@ if st.button("Generuj instrukcje"):
         progress.progress((i + 1) / total, text=f"Przetworzono {pdf_path.name}")
 
     progress.empty()
-    st.success(f"Wygenerowano {len(generated_files)} plików.")
+    if generated_files:
+        st.success(f"Wygenerowano {len(generated_files)} z {total} plików.")
+    else:
+        st.warning("Nie udało się wygenerować żadnego pliku.")
 
 if generated_files:
     st.subheader("Gotowe instrukcje do pobrania")

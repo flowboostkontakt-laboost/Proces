@@ -8,8 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+import fitz
 import pdfplumber
 from openpyxl import load_workbook
+from pdfplumber.utils.exceptions import PdfminerException
 from openpyxl.cell.rich_text import CellRichText, TextBlock
 from openpyxl.cell.text import InlineFont
 from openpyxl.drawing.image import Image
@@ -227,7 +229,7 @@ def section_slice(text: str, start_patterns: Iterable[str], end_patterns: Iterab
         if match and match.start() > 0:
             end_index = match.start()
             break
-    return tail[:end_index].strip() if end_index else tail.strip()
+    return str(tail[:end_index].strip() if end_index else tail.strip())
 
 
 def capture_first(text: str, patterns: Iterable[str]) -> str:
@@ -247,12 +249,25 @@ def sanitize_filename(name: str) -> str:
 
 def read_pdf_text(pdf_path: Path) -> str:
     pages: list[str] = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
-            page_text = page.extract_text() or ""
-            if page_text:
-                pages.append(page_text)
-    return normalize_text("\n".join(pages))
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            for page in pdf.pages:
+                page_text = page.extract_text() or ""
+                if page_text:
+                    pages.append(page_text)
+        return normalize_text("\n".join(pages))
+    except PdfminerException:
+        pass
+
+    try:
+        with fitz.open(str(pdf_path)) as doc:
+            for page in doc:
+                page_text = page.get_text() or ""
+                if page_text:
+                    pages.append(page_text)
+        return normalize_text("\n".join(pages))
+    except Exception as exc:
+        raise ValueError(f"Nie można odczytać PDF: {pdf_path.name}") from exc
 
 
 def extract_product_name(text: str) -> str:
@@ -302,7 +317,7 @@ def extract_producer(text: str) -> str:
 
 
 def extract_hazard_section(text: str) -> tuple[str, list[str], list[str]]:
-    section2 = section_slice(text, [r"SEKCJA 2: Identyfikacja zagrożeń"], [r"SEKCJA 3"])
+    section2 = section_slice(text, [r"SEKCJA 2[.:]"], [r"SEKCJA 3[.:]?"])
     if not section2:
         return "", [], []
 
@@ -310,8 +325,8 @@ def extract_hazard_section(text: str) -> tuple[str, list[str], list[str]]:
     # restrict hazard extraction to labeling subsection (2.2) to avoid classification duplicates
     label_section = section_slice(
         section2,
-        [r"2\\.2[.\\s]+"],
-        [r"2\\.3[.\\s]+", r"SEKCJA 3"]
+        ["2\\.2[.\\s]+"],
+        ["2\\.3[.\\s]+", r"SEKCJA 3"]
     )
 
     hazard_block = capture_first(
@@ -338,8 +353,15 @@ def extract_hazard_section(text: str) -> tuple[str, list[str], list[str]]:
 
     codes = sorted(set(re.findall(r"\bH\d{3}\b", " ".join(hazard_lines))))
 
-    # Only include GHS pictograms explicitly present in section (no H-to-GHS mapping)
     hazard_text = "\n".join(line for line in hazard_lines if line)
+
+    # Fallback: derive GHS pictograms from H-codes when none are explicitly present
+    if not pictogram_codes:
+        inferred: set[str] = set()
+        for code in codes:
+            inferred.update(H_TO_GHS.get(code, set()))
+        pictogram_codes = sorted(inferred)
+
     return hazard_text, codes, pictogram_codes
 
 
@@ -369,7 +391,8 @@ def extract_first_aid(text: str) -> dict[str, str]:
     ascii_text = strip_accents(text)
 
     start = None
-    for marker in ["4.1. Opis srodkow pierwszej pomocy", "4.1 Opis srodkow pierwszej pomocy", "SEKCJA 4: Srodki pierwszej pomocy"]:
+    for marker in ["4.1. Opis srodkow pierwszej pomocy", "4.1 Opis srodkow pierwszej pomocy", "SEKCJA 4[.:]"]:
+
         idx = ascii_text.find(marker)
         if idx >= 0:
             start = idx
@@ -477,7 +500,7 @@ def extract_first_aid_general(text: str) -> str:
 
 
 def extract_fire_data(text: str) -> dict[str, str]:
-    section = section_slice(text, [r"SEKCJA 5: Postępowanie w przypadku pożaru"], [r"SEKCJA 6"])
+    section = section_slice(text, [r"SEKCJA 5[.:]"], [r"SEKCJA 6[.:]?"])
     sub = section_slice(section or text, [r"5\.1[.\s]+Środki gaśnicze"], [r"5\.2[.\s]+", r"5\.3[.\s]+", r"SEKCJA 6"])
 
     suitable = extract_subsection(
@@ -508,8 +531,8 @@ def extract_fire_data(text: str) -> dict[str, str]:
 def extract_environmental_release(text: str) -> str:
     section6 = section_slice(
         text,
-        [r"SEKCJA 6: Postępowanie w przypadku niezamierzonego uwolnienia do środowiska"],
-        [r"SEKCJA 7"],
+        [r"SEKCJA 6[.:]"],
+        [r"SEKCJA 7[.:]?"],
     )
     if not section6:
         return ""
@@ -609,8 +632,8 @@ def extract_nds(text: str) -> str:
 def extract_work_instructions(text: str) -> dict[str, list[str] | str]:
     section7 = section_slice(
         text,
-        [r"SEKCJA 7: Postępowanie z substancjami i mieszaninami oraz ich magazynowanie"],
-        [r"SEKCJA 8"],
+        [r"SEKCJA 7[.:]"],
+        [r"SEKCJA 8[.:]?"],
     )
     handling = section_slice(
         section7 or text,
