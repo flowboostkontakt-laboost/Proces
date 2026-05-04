@@ -151,8 +151,9 @@ H_TO_GHS = {
     "H400": {"GHS09"},
     "H410": {"GHS09"},
     "H411": {"GHS09"},
-    "H412": {"GHS09"},
-    "H413": {"GHS09"},
+    # CLP Annex II: H412 (Aquatic Chronic 3) i H413 (Aquatic Chronic 4) - brak piktogramu, brak hasla ostrzegawczego
+    "H412": set(),
+    "H413": set(),
 }
 
 
@@ -321,13 +322,13 @@ def extract_hazard_section(text: str) -> tuple[str, list[str], list[str]]:
     if not section2:
         return "", [], []
 
-    pictogram_codes = sorted(set(re.findall(r"\bGHS0[1-9]\b", section2)))
     # restrict hazard extraction to labeling subsection (2.2) to avoid classification duplicates
     label_section = section_slice(
         section2,
         ["2\\.2[.\\s]+"],
         ["2\\.3[.\\s]+", r"SEKCJA 3"]
     )
+    pictogram_codes = sorted(set(re.findall(r"\bGHS0[1-9]\b", label_section or section2)))
 
     hazard_block = capture_first(
         section2,
@@ -360,6 +361,10 @@ def extract_hazard_section(text: str) -> tuple[str, list[str], list[str]]:
         inferred: set[str] = set()
         for code in codes:
             inferred.update(H_TO_GHS.get(code, set()))
+        # CLP Annex II 1.2.1: dla aerozoli H222/H223 piktogram GHS04 jest pomijany
+        # (kategoria aerozolu pokrywa "pojemnik pod cisnieniem" przez GHS02).
+        if "H222" in codes or "H223" in codes:
+            inferred.discard("GHS04")
         pictogram_codes = sorted(inferred)
 
     return hazard_text, codes, pictogram_codes
@@ -1071,6 +1076,12 @@ def populate_workbook(
     shutil.copy2(template_path, output_path)
     wb = load_workbook(output_path)
     ws = wb[wb.sheetnames[0]]
+
+    # Podziel obszar zagrozen A11:G14 na: A11:E14 (tekst po lewej) + F11:G14 (piktogramy po prawej)
+    if "A11:G14" in {str(r) for r in ws.merged_cells.ranges}:
+        ws.unmerge_cells("A11:G14")
+        ws.merge_cells("A11:E14")
+        ws.merge_cells("F11:G14")
 
     write_value(ws, CELL_MAP["producer"], data.producer)
     write_value(ws, CELL_MAP["product_name"], data.product_name)
