@@ -207,6 +207,47 @@ def compact_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def clean_block(text: str) -> str:
+    cleaned_lines: list[str] = []
+    for raw in normalize_text(text).splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if re.search(r"^Strona \d+ z \d+$", line, re.IGNORECASE):
+            continue
+        if re.search(r"^KARTA CHARAKTERYSTYKI", line, re.IGNORECASE):
+            continue
+        if re.search(r"^STP.?DIN Chemicals", line, re.IGNORECASE):
+            continue
+        if re.search(r"^Data aktualizacji:", line, re.IGNORECASE):
+            continue
+        if re.search(r"^Nr karty:", line, re.IGNORECASE):
+            continue
+        line = re.sub(r"^[\-\u2022\u00b7]\s*", "", line)
+        cleaned_lines.append(line)
+    return normalize_text("\n".join(cleaned_lines))
+
+
+def line_section_slice(text: str, start_patterns: Iterable[str], end_patterns: Iterable[str]) -> str:
+    start = None
+    for pattern in start_patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
+        if match:
+            start = match.start()
+            break
+    if start is None:
+        return ""
+
+    tail = text[start:]
+    end_index = None
+    for pattern in end_patterns:
+        match = re.search(pattern, tail, flags=re.IGNORECASE | re.MULTILINE)
+        if match and match.start() > 0:
+            end_index = match.start()
+            break
+    return clean_block(tail[:end_index].strip() if end_index else tail.strip())
+
+
 def strip_accents(text: str) -> str:
     text = text.replace("ł", "l").replace("Ł", "L")
     normalized = unicodedata.normalize("NFKD", text)
@@ -272,17 +313,29 @@ def read_pdf_text(pdf_path: Path) -> str:
 
 
 def extract_product_name(text: str) -> str:
-    value = capture_first(
+    block = line_section_slice(
         text,
-        [
-            r"1\.1[.\s]+Identyfikator produktu\s*(.+?)\s*1\.2",
-            r"SEKCJA 1:.*?1\.1[.\s]+Identyfikator produktu\s*(.+?)\s*1\.2",
-        ],
+        [r"^\s*1\.1[.\s]+Identyfikator produktu"],
+        [r"^\s*1\.2[.\s]+"],
     )
-    value = re.sub(r"^[·\s]*Nazwa handlowa:\s*", "", value, flags=re.IGNORECASE)
-    value = re.split(r"\n[·\s]*UFI:", value, maxsplit=1, flags=re.IGNORECASE)[0]
-    return normalize_text(value)
+    if not block:
+        return ""
 
+    lines = [line.strip(" :") for line in block.splitlines() if line.strip()]
+    if lines and re.match(r"^1\.1", lines[0], re.IGNORECASE):
+        lines = lines[1:]
+
+    preferred: list[str] = []
+    for line in lines:
+        lower = strip_accents(line).lower()
+        if lower.startswith(("klasyfikacja adr", "klasyfikacje", "nr cas", "nr we", "ufi")):
+            break
+        if lower.startswith(("nazwa handlowa", "nazwy handlowe", "nazwa substancji", "opis chemiczny", "wzor chemiczny", "opis chemiczny, wzor")):
+            preferred.append(line)
+        elif not preferred:
+            preferred.append(line)
+
+    return normalize_text("\n".join(preferred).strip())
 
 def extract_revision_date(text: str) -> str:
     return capture_first(
@@ -318,57 +371,59 @@ def extract_producer(text: str) -> str:
 
 
 def extract_hazard_section(text: str) -> tuple[str, list[str], list[str]]:
-    section2 = section_slice(text, [r"SEKCJA 2[.:]"], [r"SEKCJA 3[.:]?"])
+    section2 = line_section_slice(text, [r"^\s*(?:SEKCJA|Sekcja)\s*2[.:]"], [r"^\s*(?:SEKCJA|Sekcja)\s*3[.:]?"])
     if not section2:
         return "", [], []
 
-    # restrict hazard extraction to labeling subsection (2.2) to avoid classification duplicates
-    label_section = section_slice(
+    label_section = line_section_slice(
         section2,
-        ["2\\.2[.\\s]+"],
-        ["2\\.3[.\\s]+", r"SEKCJA 3"]
+        [r"^\s*2\.2[.\s]+"],
+        [r"^\s*2\.3[.\s]+", r"^\s*(?:SEKCJA|Sekcja)\s*3"],
     )
-    pictogram_codes = sorted(set(re.findall(r"\bGHS0[1-9]\b", label_section or section2)))
+    pictogram_codes = sorted(set(re.findall(r"\bGHS\s*0?([1-9])\b", label_section or section2)))
+    pictogram_codes = [f"GHS0{code}" for code in pictogram_codes]
 
     hazard_block = capture_first(
         section2,
         [
-            r"Zwroty wskazujące rodzaj zagrożenia\s*(.+?)\s*Zwroty wskazujące środki ostrożności",
-            r"Zwrot określający zagrożenie\s*:?\s*(.+?)\s*Zwrot określający środki",
+            r"Zwroty wskazuj.*?rodzaj zagro.*?\s*(.+?)\s*Zwroty wskazuj.*?rodki ostroznosci",
+            r"Zwrot okre.*?laj.*? zagro.*?\s*:?\s*(.+?)\s*Zwrot okre.*?laj.*? .*?rodki",
+            r"Zwroty rodzaju zagrozenia\s*,?\s*(.+?)(?=Zagrozenia fizyczne|2\.2|2\.3|$)",
         ],
     )
-    # focus on labeling text only
-    search_text = compact_text(hazard_block or label_section)
+    search_text = clean_block(hazard_block or label_section or section2)
 
     matches = re.findall(
-        r"((?:EUH|H)\d{3}\s*[-–:]?\s*.+?)(?=(?:\b(?:EUH|H)\d{3}\b)|(?:\bP\d{3}\b)|$)",
+        r"((?:EUH|H)\d{3}\s*[-?: ]\s*.+?)(?=(?:\b(?:EUH|H)\d{3}\b)|(?:\bP\d{3}\b)|$)",
         search_text,
         flags=re.IGNORECASE,
     )
+    if not matches:
+        matches = [line for line in search_text.splitlines() if re.search(r"\b(?:EUH|H)\d{3}\b", line, re.IGNORECASE)]
+    if not matches:
+        for line in clean_block(section2).splitlines():
+            if re.search(r"\b(?:EUH|H)\d{3}\b", line, re.IGNORECASE):
+                matches.append(line)
+
     hazard_lines = []
     for line in matches:
-        cleaned = re.sub(r"\s*·\s*$", "", line).strip()
-        if "Zwroty wskazujące środki ostrożności" in cleaned:
-            cleaned = cleaned.split("Zwroty wskazujące środki ostrożności", 1)[0].strip()
+        cleaned = line.strip()
+        cleaned = re.sub(r"\bH(\d{3})\s*:?\s*", r"H\1 - ", cleaned)
+        cleaned = re.sub(r"\bEUH(\d{3})\s*:?\s*", r"EUH\1 - ", cleaned)
         hazard_lines.append(cleaned)
 
     codes = sorted(set(re.findall(r"\bH\d{3}\b", " ".join(hazard_lines))))
-
     hazard_text = "\n".join(line for line in hazard_lines if line)
 
-    # Fallback: derive GHS pictograms from H-codes when none are explicitly present
     if not pictogram_codes:
         inferred: set[str] = set()
         for code in codes:
             inferred.update(H_TO_GHS.get(code, set()))
-        # CLP Annex II 1.2.1: dla aerozoli H222/H223 piktogram GHS04 jest pomijany
-        # (kategoria aerozolu pokrywa "pojemnik pod cisnieniem" przez GHS02).
         if "H222" in codes or "H223" in codes:
             inferred.discard("GHS04")
         pictogram_codes = sorted(inferred)
 
     return hazard_text, codes, pictogram_codes
-
 
 def extract_subsection(section_text: str, labels: list[str], next_labels: list[str]) -> str:
     ascii_text = strip_accents(section_text)
@@ -393,91 +448,50 @@ def extract_subsection(section_text: str, labels: list[str], next_labels: list[s
 
 
 def extract_first_aid(text: str) -> dict[str, str]:
-    ascii_text = strip_accents(text)
-
-    start = None
-    for marker in ["4.1. Opis srodkow pierwszej pomocy", "4.1 Opis srodkow pierwszej pomocy", "SEKCJA 4[.:]"]:
-
-        idx = ascii_text.find(marker)
-        if idx >= 0:
-            start = idx
-            break
-    if start is None:
+    block = line_section_slice(
+        text,
+        [r"^\s*4\.1[.\s]+Opis srodkow pierwszej pomocy", r"^\s*(?:SEKCJA|Sekcja)\s*4[.:]"],
+        [r"^\s*4\.2[.\s]+", r"^\s*(?:SEKCJA|Sekcja)\s*5[.:]?"],
+    )
+    if not block:
         return {}
 
-    end_candidates = []
-    for marker in ["4.2.", "4.2 ", "SEKCJA 5"]:
-        idx = ascii_text.find(marker, start + 1)
-        if idx >= 0:
-            end_candidates.append(idx)
-    end = min(end_candidates) if end_candidates else len(text)
-
-    block = text[start:end]
-    ascii_block = ascii_text[start:end]
-
-    inline_map = {
-        "inhalation": r"Po wdychaniu\s*:?\s*(.+?)(?=Po stycznosci ze skora|Po stycznosci z okiem|Po przelknieciu|4\.2)",
-        "skin": r"Po stycznosci ze skora\s*:?\s*(.+?)(?=Po stycznosci z okiem|Po przelknieciu|4\.2)",
-        "eyes": r"Po stycznosci z okiem\s*:?\s*(.+?)(?=Po przelknieciu|4\.2)",
-        "ingestion": r"Po przelknieciu\s*:?\s*(.+?)(?=4\.2|4\.3|Najwazniejsze ostre)",
-    }
-    inline_hits: dict[str, str] = {}
-    for key, pattern in inline_map.items():
-        match = re.search(pattern, ascii_block, flags=re.IGNORECASE | re.DOTALL)
-        inline_hits[key] = normalize_text(block[match.start(1):match.end(1)]).strip(" ·") if match else ""
-    if any(inline_hits.values()):
-        if not inline_hits["ingestion"]:
-            fallback_ingestion = capture_first(
-                block,
-                [r"Po przełknięciu:\s*(.+?)(?=4\.2|4\.3)", r"Po przelknieciu:\s*(.+?)(?=4\.2|4\.3)"],
-            )
-            inline_hits["ingestion"] = normalize_text(fallback_ingestion).strip(" ·")
-        return {
-            "inhalation": inline_hits["inhalation"],
-            "skin": inline_hits["skin"],
-            "eyes": inline_hits["eyes"],
-            "ingestion": inline_hits["ingestion"],
-        }
+    ascii_block = strip_accents(block)
 
     def capture(labels: list[str], next_labels: list[str]) -> str:
-        start = None
-        matched_label = None
+        match = None
         for label in labels:
-            idx = ascii_block.lower().find(label.lower())
-            if idx >= 0:
-                start = idx
-                matched_label = label
+            match = re.search(label, ascii_block, flags=re.IGNORECASE)
+            if match:
                 break
-        if start is None or matched_label is None:
+        if not match:
             return ""
 
+        tail_ascii = ascii_block[match.end():]
         end = len(block)
-        tail_ascii = ascii_block[start + len(matched_label):]
         for label in next_labels:
-            idx = tail_ascii.lower().find(label.lower())
-            if idx >= 0:
-                end = min(end, start + len(matched_label) + idx)
+            next_match = re.search(label, tail_ascii, flags=re.IGNORECASE | re.MULTILINE)
+            if next_match:
+                end = min(end, match.end() + next_match.start())
 
-        snippet = block[start:end]
-        snippet = snippet.split("\n", 1)
-        snippet = snippet[1] if len(snippet) > 1 else ""
-        return normalize_text(snippet)
+        snippet = block[match.end():end]
+        return clean_block(snippet).strip(" :")
 
     inhalation = capture(
-        ["Przedostanie sie do drog oddechowych", "Drogi oddechowe", "Po wdychaniu"],
-        ["Kontakt ze skora", "Kontakt z oczami", "Polkniecie"],
+        [r"Wdychanie\s*:", r"Po wdychaniu\s*:", r"Drogi oddechowe\s*:"],
+        [r"Kontakt ze skora\s*:", r"Kontakt z oczami\s*:", r"Spozycie\s*:", r"Polkniecie\s*:", r"^\s*4\.2"],
     )
     skin = capture(
-        ["Kontakt ze skora", "Po stycznosci ze skora"],
-        ["Kontakt z oczami", "Polkniecie"],
+        [r"Kontakt ze skora\s*:", r"Po stycznosci ze skora\s*:"],
+        [r"Kontakt z oczami\s*:", r"Spozycie\s*:", r"Polkniecie\s*:", r"^\s*4\.2"],
     )
     eyes = capture(
-        ["Kontakt z oczami", "Po stycznosci z okiem", "Po stycznosci z oczami"],
-        ["Polkniecie", "4.2", "4.3"],
+        [r"Kontakt z oczami\s*:", r"Po stycznosci z okiem\s*:", r"Po stycznosci z oczami\s*:"],
+        [r"Spozycie\s*:", r"Polkniecie\s*:", r"^\s*4\.2"],
     )
     ingestion = capture(
-        ["Polkniecie", "Po przelknieciu"],
-        ["4.2", "4.3"],
+        [r"Spozycie\s*:", r"Polkniecie\s*:", r"Po przelknieciu\s*:"],
+        [r"^\s*4\.2", r"^\s*4\.3"],
     )
     return {
         "inhalation": inhalation,
@@ -485,7 +499,6 @@ def extract_first_aid(text: str) -> dict[str, str]:
         "eyes": eyes,
         "ingestion": ingestion,
     }
-
 
 def extract_first_aid_general(text: str) -> str:
     section = section_slice(
@@ -505,33 +518,24 @@ def extract_first_aid_general(text: str) -> str:
 
 
 def extract_fire_data(text: str) -> dict[str, str]:
-    section = section_slice(text, [r"SEKCJA 5[.:]"], [r"SEKCJA 6[.:]?"])
-    sub = section_slice(section or text, [r"5\.1[.\s]+Środki gaśnicze"], [r"5\.2[.\s]+", r"5\.3[.\s]+", r"SEKCJA 6"])
+    section = line_section_slice(text, [r"^\s*(?:SEKCJA|Sekcja)\s*5[.:]"], [r"^\s*(?:SEKCJA|Sekcja)\s*6[.:]?"])
+    sub = line_section_slice(section or text, [r"^\s*5\.1[.\s]+"], [r"^\s*5\.2[.\s]+", r"^\s*5\.3[.\s]+", r"^\s*(?:SEKCJA|Sekcja)\s*6"])
 
-    suitable = extract_subsection(
-        sub,
-        [r"odpowiednie srodki gasnicze", r"środki gaśnicze", r"odpowiednie środki gaśnicze", r"przydatne srodki gasnicze"],
-        [r"niewlasciwe srodki gasnicze", r"srodki gasnicze, ktore nie moga byc uzywane", r"środki gaśnicze, które nie mogą być używane", r"nieprzydatne ze wzgledow bezpieczenstwa"],
-    )
-    unsuitable = extract_subsection(
-        sub,
-        [r"niewlasciwe srodki gasnicze", r"srodki gasnicze, ktore nie moga byc uzywane", r"środki gaśnicze, które nie mogą być używane", r"nieprzydatne ze wzgledow bezpieczenstwa"],
-        [r"5\.2", r"5\.3", r"SEKCJA 6"],
-    )
+    suitable = capture_first(sub, [r"Odpowiednie(?: srodki)?\s*:?\s*(.+?)(?=Nieodpowiednie|5\.2|5\.3|$)", r"5\.1[^\n]*?:\s*(.+?)(?=Nieodpowiednie|5\.2|5\.3|$)"])
+    unsuitable = capture_first(sub, [r"Nieodpowiednie\s*:?\s*(.+?)(?=5\.2|5\.3|$)"])
+    suitable = clean_block(re.sub(r"^srodki:\s*", "", suitable, flags=re.IGNORECASE))
+    unsuitable = clean_block(unsuitable)
 
     overview_lines = []
     if suitable:
-        suitable = re.sub(r"\s*·\s*Środki gaśnicze\s*$", "", suitable).strip(" ·")
         overview_lines.append(f"Odpowiednie: {compact_text(suitable)}")
     if unsuitable:
-        unsuitable = unsuitable.strip(" ·")
         overview_lines.append(f"Nieodpowiednie: {compact_text(unsuitable)}")
     return {
         "overview": "\n".join(overview_lines),
         "suitable": suitable,
         "unsuitable": unsuitable,
     }
-
 
 def extract_environmental_release(text: str) -> str:
     section6 = section_slice(
@@ -557,59 +561,64 @@ def extract_environmental_release(text: str) -> str:
 
 
 def extract_protection(text: str) -> dict[str, str]:
-    block = section_slice(text, [r"8\.2[.\s]+Kontrola narażenia", r"8\.2[.\s]+Kontrola narazenia"], [r"SEKCJA 9"])
-    if not block:
+    section8 = line_section_slice(
+        text,
+        [r"^\s*(?:SEKCJA|Sekcja)\s*8[.:]"],
+        [r"^\s*(?:SEKCJA|Sekcja)\s*9[.:]?"],
+    )
+    if not section8:
         return {}
 
+    block = capture_first(
+        section8,
+        [r"8\.2[.\s]+Kontrola nara.+?\s*(.+)", r"8\.2\.\s*(.+)"],
+    ) or section8
+    block = clean_block(block)
+    ascii_block = strip_accents(block)
+
+    def capture(labels: list[str], next_labels: list[str]) -> str:
+        match = None
+        for label in labels:
+            match = re.search(label, ascii_block, flags=re.IGNORECASE)
+            if match:
+                break
+        if not match:
+            return ""
+        tail_ascii = ascii_block[match.end():]
+        end = len(block)
+        for label in next_labels:
+            next_match = re.search(label, tail_ascii, flags=re.IGNORECASE)
+            if next_match:
+                end = min(end, match.end() + next_match.start())
+        return clean_block(block[match.end():end]).strip(" :")
+
     next_labels = [
-        r"ochrona rak",
         r"ochrona drog oddechowych",
+        r"ochrona ukladu oddechowego",
+        r"ochrona rak",
+        r"ochrona nog",
         r"ochrona skory",
+        r"ochrona ciala",
         r"ochrona oczu",
         r"ochrona oczu lub twarzy",
+        r"ochrona oczu i twarzy",
+        r"kontrola narazenia srodowiska",
+        r"indywidualne srodki ochrony",
         r"zagrozenia termiczne",
-        r"wskazowki dotyczace osobistego osprzetu ochronnego",
     ]
 
-    hands = extract_subsection(block, [r"ochrona rak", r"ochrona skory - ochrona rak"], next_labels)
-    respirator = extract_subsection(block, [r"ochrona drog oddechowych"], next_labels)
-    skin = extract_subsection(block, [r"ochrona skory", r"ochrona skory - inne"], next_labels)
-    eyes = extract_subsection(block, [r"ochrona oczu", r"ochrona oczu lub twarzy"], next_labels)
-    if not respirator:
-        respirator = capture_first(
-            block,
-            [r"Ochronę dróg oddechowych\s*:?\s*(.+?)(?=·\s*Zalecane urządzenie filtrujące|·\s*Ochrona rąk|·\s*Ochrona rak|SEKCJA 9)"],
-        )
-    if not hands:
-        hands = capture_first(
-            block,
-            [r"Ochrona rąk\s*:?\s*(.+?)(?=·\s*Ochronę oczu|·\s*Ochrona ciała|SEKCJA 9)"],
-        )
-    if not eyes:
-        eyes = capture_first(
-            block,
-            [r"Ochronę oczu lub twarzy\s*:?\s*(.+?)(?=·\s*Ochrona ciała|SEKCJA 9)"],
-        )
-    if not skin:
-        skin = capture_first(
-            block,
-            [r"Ochrona ciała\s*:?\s*(.+?)(?=SEKCJA 9)", r"Ochrona ciała:([^\n]+)"],
-        )
-    if hands:
-        hands = re.split(r"·\s*Ochronę oczu|·\s*Ochrona ciała", hands, maxsplit=1)[0].strip()
-    if respirator:
-        respirator = re.split(r"·\s*Zalecane urządzenie filtrujące|·\s*Ochrona rąk", respirator, maxsplit=1)[0].strip()
-    if eyes:
-        eyes = re.split(r"·\s*Ochrona ciała", eyes, maxsplit=1)[0].strip()
-    if skin:
-        skin = re.split(r"\*", skin, maxsplit=1)[0].strip()
+    respirator = capture([r"ochrona drog oddechowych\s*:?", r"ochrona ukladu oddechowego\s*:?"] , next_labels)
+    hands = capture([r"ochrona rak\s*:?"] , next_labels)
+    skin = capture([r"ochrona skory\s*:?", r"ochrona ciala\s*:?"] , next_labels)
+    eyes = capture([r"ochrona oczu(?: lub twarzy| i twarzy)?\s*:?"], next_labels)
+
     return {
         "hands": hands,
         "respirator": respirator,
         "skin": skin,
         "eyes": eyes,
     }
- 
+
 def extract_nds(text: str) -> str:
     # Extract NDS (exposure limit) block from sekcja 8.1 up to 8.2
     # slice from section 8.1 to 8.2
@@ -645,11 +654,17 @@ def extract_work_instructions(text: str) -> dict[str, list[str] | str]:
         [r"7\.1[.\s]+Środki ostrożności dotyczące bezpiecznego postępowania"],
         [r"7\.2[.\s]+", r"7\.3[.\s]+", r"SEKCJA 8"],
     )
-    storage = section_slice(
+    storage = line_section_slice(
         section7 or text,
-        [r"7\.2[.\s]+Warunki bezpiecznego magazynowania"],
-        [r"7\.3[.\s]+", r"SEKCJA 8"],
+        [r"^\s*7\.2[.\s]+"],
+        [r"^\s*7\.3[.\s]+", r"^\s*(?:SEKCJA|Sekcja)\s*8"],
     )
+    if not storage:
+        storage = line_section_slice(
+            text,
+            [r"^\s*7\.2[.\s]+"],
+            [r"^\s*7\.3[.\s]+", r"^\s*(?:SEKCJA|Sekcja)\s*8"],
+        )
     emergency = section_slice(
         text,
         [r"6\.1[.\s]+Indywidualne środki ostrożności.*?awaryjnych"],
@@ -677,6 +692,15 @@ def extract_work_instructions(text: str) -> dict[str, list[str] | str]:
 
     handling_lines = clean_lines(handling)
     storage_lines = clean_lines(storage)
+    if not storage_lines:
+        storage_lines = [
+            line.strip()
+            for line in storage.splitlines()
+            if line.strip() and not re.match(r"^\s*7\.[23]", line)
+        ]
+    if not storage_lines and section7:
+        storage_fallback = capture_first(section7, [r"7\.2.+?\n(.+?)(?=7\.3|(?:SEKCJA|Sekcja)\s*8|$)"])
+        storage_lines = clean_lines(storage_fallback)
     storage_lines = [re.sub(r"^[·\s]*", "", line) for line in storage_lines]
     storage_lines = [line for line in storage_lines if strip_accents(line).lower() not in {"skladowanie:", "niezgodnosci"}]
     emergency_lines = clean_lines(emergency)
@@ -758,8 +782,8 @@ def extract_work_instructions(text: str) -> dict[str, list[str] | str]:
         "before_work": before_work[:8],
         "during_work": during_work[:6],
         "after_work": after_work[:2],
-        "handling": handling_lines[:2],
-        "storage": storage_lines[:2],
+        "handling": handling_lines,
+        "storage": storage_lines,
     }
 
 
@@ -1025,9 +1049,6 @@ def layout_ghs_images(ws, pictograms: list[str]) -> list[tuple[str, OneCellAncho
     area_cols = ["F", "G"]
     area_rows = [11, 12, 13, 14]
 
-    for c in area_cols:
-        ws.column_dimensions[c].width = 13.0
-
     col_widths = [_col_width_px(ws, c) for c in area_cols]
     row_heights = [_row_height_px(ws, r) for r in area_rows]
     total_width = sum(col_widths)
@@ -1077,20 +1098,14 @@ def populate_workbook(
     wb = load_workbook(output_path)
     ws = wb[wb.sheetnames[0]]
 
-    # Podziel obszar zagrozen A11:G14 na: A11:E14 (tekst po lewej) + F11:G14 (piktogramy po prawej)
-    if "A11:G14" in {str(r) for r in ws.merged_cells.ranges}:
-        ws.unmerge_cells("A11:G14")
-        ws.merge_cells("A11:E14")
-        ws.merge_cells("F11:G14")
-
     write_value(ws, CELL_MAP["producer"], data.producer)
     write_value(ws, CELL_MAP["product_name"], data.product_name)
     write_value(ws, CELL_MAP["revision_date"], data.revision_date)
     write_value(ws, CELL_MAP["hazards"], data.hazard_text)
-    write_value(ws, CELL_MAP["hand_protection"], data.hand_protection)
-    write_value(ws, CELL_MAP["respiratory_protection"], data.respiratory_protection)
-    write_value(ws, CELL_MAP["skin_protection"], data.skin_protection)
-    write_value(ws, CELL_MAP["eye_protection"], data.eye_protection)
+    write_value(ws, CELL_MAP["hand_protection"], _combine_value("Ochrona rąk:", data.hand_protection))
+    write_value(ws, CELL_MAP["respiratory_protection"], _combine_value("Ochrona dróg oddechowych:", data.respiratory_protection))
+    write_value(ws, CELL_MAP["skin_protection"], _combine_value("Ochrona skóry:", data.skin_protection))
+    write_value(ws, CELL_MAP["eye_protection"], _combine_value("Ochrona oczu lub twarzy:", data.eye_protection))
     write_value(ws, CELL_MAP["first_aid_general"], data.first_aid_general, append=True)
     write_value(ws, CELL_MAP["first_aid_inhalation"], data.first_aid_inhalation, append=True)
     write_value(ws, CELL_MAP["first_aid_skin"], data.first_aid_skin, append=True)
@@ -1100,8 +1115,8 @@ def populate_workbook(
     write_value(ws, CELL_MAP["fire_suitable"], data.fire_suitable, append=True)
     write_value(ws, CELL_MAP["fire_unsuitable"], data.fire_unsuitable, append=True)
     write_value(ws, CELL_MAP["environmental_release"], data.environmental_release, append=True)
-    write_value(ws, CELL_MAP["handling_1"], "\n".join(data.handling[:2]), append=True)
-    write_value(ws, CELL_MAP["storage_1"], "\n".join(data.storage[:2]), append=True)
+    write_value(ws, CELL_MAP["handling_1"], "\n".join(data.handling), append=True)
+    write_value(ws, CELL_MAP["storage_1"], "\n".join(data.storage), append=True)
 
     set_row_heights(ws)
 

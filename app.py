@@ -1,4 +1,3 @@
-import io
 from pathlib import Path
 
 import streamlit as st
@@ -6,7 +5,6 @@ import streamlit as st
 from main import (
     ASSETS_DIR,
     BASE_DIR,
-    FALLBACK_INPUT_DIR,
     INPUT_DIR,
     OUTPUT_DIR,
     TEMP_IMAGES_DIR,
@@ -22,6 +20,9 @@ st.title("Generator Instrukcji BHP")
 
 INPUT_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
+
+if "generated_files" not in st.session_state:
+    st.session_state.generated_files = []
 
 uploaded_files = st.file_uploader(
     "Wgraj pliki PDF z kartami charakterystyki",
@@ -55,9 +56,8 @@ if not selected:
     st.info("Zaznacz przynajmniej jeden plik.")
     st.stop()
 
-generated_files: list[Path] = []
-
 if st.button("Generuj instrukcje"):
+    generated_files: list[Path] = []
     progress = st.progress(0, text="Przetwarzanie...")
     total = len(selected)
 
@@ -84,20 +84,24 @@ if st.button("Generuj instrukcje"):
         progress.progress((i + 1) / total, text=f"Przetworzono {pdf_path.name}")
 
     progress.empty()
+    st.session_state.generated_files = [str(path) for path in generated_files]
     if generated_files:
         st.success(f"Wygenerowano {len(generated_files)} z {total} plików.")
     else:
         st.warning("Nie udało się wygenerować żadnego pliku.")
+
+generated_files = [Path(path) for path in st.session_state.generated_files]
 
 if generated_files:
     st.subheader("Gotowe instrukcje do pobrania")
     cols = st.columns(2)
     for idx, path in enumerate(generated_files):
         with open(path, "rb") as f:
-            cols[idx % 2].download_button(
-                label=f"Pobierz {path.name}",
-                data=f,
-                file_name=path.name,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key=f"dl_{path.name}",
-            )
+            data = f.read()
+        cols[idx % 2].download_button(
+            label=f"Pobierz {path.name}",
+            data=data,
+            file_name=path.name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"dl_{path.name}",
+        )
