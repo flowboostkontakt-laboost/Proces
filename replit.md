@@ -5,13 +5,29 @@ Streamlit application that generates Polish BHP (workplace safety) instruction E
 ## Stack
 - Python 3.12
 - Streamlit (frontend)
-- pdfplumber (PDF parsing)
-- openpyxl (Excel generation)
-- Pillow (image handling)
+- anthropic (ekstrakcja danych z karty charakterystyki przez Claude API)
+- pdfplumber, openpyxl, Pillow (przetwarzanie / generowanie Excela)
+
+## Konfiguracja (wymagane)
+Ekstrakcja danych z karty charakterystyki działa przez Claude API i obsługuje
+także skany (OCR). Wymagany sekret:
+
+- `ANTHROPIC_API_KEY` — klucz API Anthropic. W Replit ustaw w zakładce
+  **Secrets**. Bez klucza aplikacja pokaże czytelny błąd i nie wygeneruje
+  instrukcji.
+
+Opcjonalnie:
+
+- `CLAUDE_MODEL` — model do ekstrakcji (domyślnie `claude-sonnet-4-6`).
+
+Limit dla automatycznej ekstrakcji: PDF do ~30 MB / 100 stron. Większe skany
+poza zakresem (do podziału ręcznego). Instalacja zależności:
+`pip install -r requirements.txt`.
 
 ## Project Layout
 - `app.py` — Streamlit UI entry point
-- `main.py` — PDF data extraction and Excel workbook population logic
+- `extraction_ai.py` — ekstrakcja danych z karty przez Claude API (PDF/skan)
+- `main.py` — orkiestracja ekstrakcji i wypełnianie szablonu Excel
 - `assets/` — Static assets used in generated workbooks
 - `DOCS/` — Sample input PDFs
 - `temp_images/` — Temporary image storage during processing

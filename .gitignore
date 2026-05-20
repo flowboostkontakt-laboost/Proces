@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Secrets — NIGDY nie commitować klucza API
+.streamlit/secrets.toml
+.env
+.env.local
+
+# Wygenerowane instrukcje (output)
+GOTOWE_INSTRUKCJE/
+
+# Wgrywane karty użytkownika (PDF) — DOCS/ pozostaje jako próbki demo
+DANE_WEJSCIOWE/
+
+# OS
+.DS_Store
+Thumbs.db
