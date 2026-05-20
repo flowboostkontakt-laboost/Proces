@@ -1,9 +1,11 @@
+# Port/adres/CORS/XSRF dla Replit są ustawione w `.replit` (CLI args
+# `streamlit run --server.port 5000 ...`) — nie hardkodujemy ich tutaj,
+# żeby Streamlit Cloud mógł użyć swoich domyślnych ustawień (port 8501,
+# CORS/XSRF włączone). Inaczej healthcheck Cloud bije w 8501 i dostaje
+# connection refused.
+
 [server]
 headless = true
-address = "0.0.0.0"
-port = 5000
-enableCORS = false
-enableXsrfProtection = false
 
 [browser]
 gatherUsageStats = false
