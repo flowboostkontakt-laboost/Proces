@@ -1,7 +1,20 @@
 import io
+import os
 from pathlib import Path
 
 import streamlit as st
+
+# Propaguj sekrety Streamlit (Streamlit Cloud / .streamlit/secrets.toml) do
+# os.environ — extraction_ai i anthropic SDK czytają stamtąd. Bez tego na
+# Streamlit Cloud sekrety byłyby dostępne tylko jako st.secrets["..."] i
+# aplikacja zgłaszałaby brak klucza.
+try:
+    for _key in ("ANTHROPIC_API_KEY", "CLAUDE_MODEL"):
+        _val = st.secrets.get(_key)
+        if _val:
+            os.environ.setdefault(_key, str(_val))
+except Exception:
+    pass  # brak pliku secrets.toml lokalnie — używamy env vars
 
 from main import (
     ASSETS_DIR,
@@ -55,30 +68,47 @@ if not selected:
     st.info("Zaznacz przynajmniej jeden plik.")
     st.stop()
 
+generated_files: list[Path] = []
+
+if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+    st.error(
+        "Brak klucza **ANTHROPIC_API_KEY**. Ustaw sekret ANTHROPIC_API_KEY "
+        "(w Replit: zakładka **Secrets**) i odśwież stronę — bez klucza "
+        "ekstrakcja danych z karty nie zadziała."
+    )
+    st.stop()
+
 if st.button("Generuj instrukcje"):
     progress = st.progress(0, text="Przetwarzanie...")
     total = len(selected)
-    generated_files: list[Path] = []
+    errors = 0
 
     for i, pdf_path in enumerate(selected):
-        data = extract_data(pdf_path)
-        product = data.product_name or pdf_path.stem
-        output_name = f"Instrukcja_BHP_{sanitize_filename(product)}.xlsx"
-        output_path = OUTPUT_DIR / output_name
+        try:
+            data = extract_data(pdf_path)
+            product = data.product_name or pdf_path.stem
+            output_name = f"Instrukcja_BHP_{sanitize_filename(product)}.xlsx"
+            output_path = OUTPUT_DIR / output_name
 
-        populate_workbook(
-            data,
-            output_path,
-            template_path=TEMPLATE_PATH,
-            assets_dir=ASSETS_DIR,
-            temp_images_dir=TEMP_IMAGES_DIR,
-        )
-        generated_files.append(output_path)
+            populate_workbook(
+                data,
+                output_path,
+                template_path=TEMPLATE_PATH,
+                assets_dir=ASSETS_DIR,
+                temp_images_dir=TEMP_IMAGES_DIR,
+            )
+            generated_files.append(output_path)
+        except Exception as exc:  # czytelny komunikat zamiast crashu Streamlit
+            errors += 1
+            st.error(f"Błąd przetwarzania {pdf_path.name}: {exc}")
         progress.progress((i + 1) / total, text=f"Przetworzono {pdf_path.name}")
 
     progress.empty()
     st.session_state["generated_files"] = generated_files
-    st.success(f"Wygenerowano {len(generated_files)} plików.")
+    if generated_files:
+        st.success(f"Wygenerowano {len(generated_files)} plików.")
+    if errors:
+        st.warning(f"Nie udało się przetworzyć {errors} plików.")
 
 generated_files = [
     path for path in st.session_state.get("generated_files", []) if path.exists()

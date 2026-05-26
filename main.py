@@ -736,43 +736,15 @@ def extract_work_instructions(text: str) -> dict[str, list[str] | str]:
 
 
 def extract_data(pdf_path: Path) -> ExtractedData:
-    text = read_pdf_text(pdf_path)
+    """Wyciągnij dane z karty charakterystyki.
 
-    hazard_text, hazard_codes, hazard_pictograms = extract_hazard_section(text)
-    first_aid = extract_first_aid(text)
-    fire = extract_fire_data(text)
-    protection = extract_protection(text)
-    work = extract_work_instructions(text)
-    # extract NDS (exposure limit) description from section 8.1
-    nds_text = extract_nds(text)
+    Ekstrakcja realizowana przez Claude API (`extraction_ai`) — niezależna od
+    formatu karty i obsługująca skany (OCR). Stare funkcje `extract_*` /
+    `read_pdf_text` pozostają w module jako nieużywany kod referencyjny.
+    """
+    from extraction_ai import extract_data_ai  # leniwy import — brak cyklu
 
-    return ExtractedData(
-        product_name=extract_product_name(text),
-        producer=extract_producer(text),
-        revision_date=extract_revision_date(text),
-        hazard_text=hazard_text,
-        hazard_codes=hazard_codes,
-        hazard_pictograms=hazard_pictograms,
-        hand_protection=protection.get("hands", ""),
-        respiratory_protection=protection.get("respirator", ""),
-        skin_protection=protection.get("skin", ""),
-        eye_protection=protection.get("eyes", ""),
-        first_aid_inhalation=first_aid.get("inhalation", ""),
-        first_aid_skin=first_aid.get("skin", ""),
-        first_aid_eyes=first_aid.get("eyes", ""),
-        first_aid_ingestion=first_aid.get("ingestion", ""),
-        first_aid_general=extract_first_aid_general(text),
-        fire_overview=fire.get("overview", ""),
-        fire_suitable=fire.get("suitable", ""),
-        fire_unsuitable=fire.get("unsuitable", ""),
-        environmental_release=extract_environmental_release(text),
-        before_work=work.get("before_work", []),
-        during_work=list(work.get("during_work", [])),
-        after_work=work.get("after_work", []),
-        storage=work.get("storage", []),
-        handling=work.get("handling", []),
-        nds=nds_text,
-    )
+    return extract_data_ai(pdf_path)
 
 
 def list_input_pdfs() -> list[Path]:
@@ -852,7 +824,13 @@ def add_image(
 def _strip_placeholder(value: str | None) -> str | None:
     if not value:
         return value
-    return re.sub(r"\s*z\s+pkt\.?\s*\d+(?:\.\d+)?\s*KCH", "", value, flags=re.IGNORECASE).strip()
+    new, hits = re.subn(
+        r"\s*z\s+pkt\.?\s*\d+(?:\.\d+)?\s*KCH", "", value, flags=re.IGNORECASE
+    )
+    if hits:
+        # Usuń „wiszący” ogon po placeholderze, np. „Drogi oddechowe: . ” -> „Drogi oddechowe:”
+        new = re.sub(r"[\s.]+$", "", new)
+    return new.strip()
 
 
 def _combine_value(existing, new: str) -> str:
@@ -987,65 +965,22 @@ def _row_height_px(ws, row_num: int) -> int:
     return int(h * 4 / 3)
 
 
+GHS_IMAGE_SIZE_PX = 40
+
+
 def layout_ghs_images(ws, pictograms: list[str]) -> list[tuple[str, OneCellAnchor | str, int]]:
-    """Return (code, anchor, size_px) list fitted into the F11:I14 area."""
-    n = len(pictograms)
-    if n == 0:
-        return []
+    """Rozmieść piktogramy GHS w bloku zagrożeń A11:G14.
 
-    area_cols = ["F", "G", "H", "I"]
-    area_rows = [11, 12, 13, 14]
-    col_widths = [_col_width_px(ws, c) for c in area_cols]
-
-    # Ignore very narrow columns when calculating layout
-    effective_col_indices = [i for i, w in enumerate(col_widths) if w >= 20]
-    effective_widths = [col_widths[i] for i in effective_col_indices]
-    effective_count = len(effective_col_indices)
-
-    total_width = sum(effective_widths)
-    total_height = sum(_row_height_px(ws, r) for r in area_rows)
-
-    if n <= 4:
-        size = min(52, total_height)
-        anchors = ["F11", "G11", "H11", "I11"]
-        return [(code, anchors[i], size) for i, code in enumerate(pictograms)]
-
-    best_size = 0
-    best_cols = effective_count
-    best_rows = (n + effective_count - 1) // effective_count
-
-    for cols in range(1, effective_count + 1):
-        rows = (n + cols - 1) // cols
-        if rows > len(area_rows):
-            continue
-        cell_w = total_width // cols
-        cell_h = total_height // rows
-        size = min(cell_w, cell_h, min(effective_widths[:cols]))
-        if size > best_size:
-            best_size = size
-            best_cols = cols
-            best_rows = rows
-
-    slot_w = total_width // best_cols
-    slot_h = total_height // best_rows
+    Stały rozmiar, prosty anchor komórkowy, kolumny F/G × wiersze 11..14
+    (max 8). NIE przelicza pikseli z szerokości kolumn ani nie zmienia
+    wysokości wierszy — układ pozostaje wierny szablonowi `wzor.xlsx`.
+    """
+    cols = ["F", "G"]
+    rows = [11, 12, 13, 14]
     result: list[tuple[str, OneCellAnchor | str, int]] = []
-
-    for i, code in enumerate(pictograms):
-        col = i % best_cols
-        row = i // best_cols
-
-        actual_col_idx = effective_col_indices[col]
-        x_pad = max(0, (slot_w - best_size) // 2)
-        x_pad = min(x_pad, col_widths[actual_col_idx] - best_size)
-        x_off = sum(col_widths[:actual_col_idx]) + x_pad
-        y_off = row * slot_h + max(0, (slot_h - best_size) // 2)
-
-        anchor = OneCellAnchor(
-            _from=AnchorMarker(col=5, colOff=x_off * 9525, row=10, rowOff=y_off * 9525),
-            ext=XDRPositiveSize2D(cx=best_size * 9525, cy=best_size * 9525),
-        )
-        result.append((code, anchor, best_size))
-
+    for i, code in enumerate(pictograms[: len(cols) * len(rows)]):
+        anchor = f"{cols[i % len(cols)]}{rows[i // len(cols)]}"
+        result.append((code, anchor, GHS_IMAGE_SIZE_PX))
     return result
 
 
@@ -1064,7 +999,10 @@ def populate_workbook(
     write_value(ws, CELL_MAP["producer"], data.producer)
     write_value(ws, CELL_MAP["product_name"], data.product_name)
     write_value(ws, CELL_MAP["revision_date"], data.revision_date)
-    write_value(ws, CELL_MAP["hazards"], data.hazard_text)
+    # A11 (scalona A11:G14): wpisz zwroty H tylko gdy są — w przeciwnym razie
+    # zostaw placeholder/format szablonu nienaruszony.
+    if (data.hazard_text or "").strip():
+        write_value(ws, CELL_MAP["hazards"], data.hazard_text)
     write_value(ws, CELL_MAP["hand_protection"], data.hand_protection, append=True)
     write_value(ws, CELL_MAP["respiratory_protection"], data.respiratory_protection, append=True)
     write_value(ws, CELL_MAP["skin_protection"], data.skin_protection, append=True)
@@ -1078,10 +1016,10 @@ def populate_workbook(
     write_value(ws, CELL_MAP["fire_suitable"], data.fire_suitable, append=True)
     write_value(ws, CELL_MAP["fire_unsuitable"], data.fire_unsuitable, append=True)
     write_value(ws, CELL_MAP["environmental_release"], data.environmental_release, append=True)
-    write_value(ws, CELL_MAP["handling_1"], "\n".join(data.handling[:2]), append=True)
-    write_value(ws, CELL_MAP["storage_1"], "\n".join(data.storage[:2]), append=True)
+    write_value(ws, CELL_MAP["handling_1"], "\n".join(data.handling), append=True)
+    write_value(ws, CELL_MAP["storage_1"], "\n".join(data.storage), append=True)
 
-    set_row_heights(ws)
+    # NIE nadpisujemy wysokości wierszy — geometria pozostaje wierna wzor.xlsx.
 
     ws._images = []
     static_assets = resolve_static_assets(assets_dir=assets_dir, temp_images_dir=temp_images_dir)
