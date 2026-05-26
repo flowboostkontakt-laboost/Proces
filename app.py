@@ -1,5 +1,7 @@
 import io
 import os
+import sys
+import traceback
 from pathlib import Path
 
 import streamlit as st
@@ -71,10 +73,11 @@ if not selected:
 generated_files: list[Path] = []
 
 if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+    # Szczegół techniczny tylko do logów serwera (dla administratora).
+    print("[KONFIG] Brak ANTHROPIC_API_KEY w środowisku.", file=sys.stderr)
     st.error(
-        "Brak klucza **ANTHROPIC_API_KEY**. Ustaw sekret ANTHROPIC_API_KEY "
-        "(w Replit: zakładka **Secrets**) i odśwież stronę — bez klucza "
-        "ekstrakcja danych z karty nie zadziała."
+        "Generowanie instrukcji jest chwilowo niedostępne. "
+        "Skontaktuj się z administratorem aplikacji."
     )
     st.stop()
 
@@ -98,9 +101,14 @@ if st.button("Generuj instrukcje"):
                 temp_images_dir=TEMP_IMAGES_DIR,
             )
             generated_files.append(output_path)
-        except Exception as exc:  # czytelny komunikat zamiast crashu Streamlit
+        except Exception:  # ukryj szczegół techniczny przed użytkownikiem
             errors += 1
-            st.error(f"Błąd przetwarzania {pdf_path.name}: {exc}")
+            # Pełny błąd trafia do logów serwera — administrator zobaczy szczegóły.
+            traceback.print_exc()
+            st.error(
+                f"Nie udało się przetworzyć pliku {pdf_path.name}. "
+                "Skontaktuj się z administratorem aplikacji."
+            )
         progress.progress((i + 1) / total, text=f"Przetworzono {pdf_path.name}")
 
     progress.empty()
