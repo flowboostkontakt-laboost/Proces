@@ -55,11 +55,10 @@ if not selected:
     st.info("Zaznacz przynajmniej jeden plik.")
     st.stop()
 
-generated_files: list[Path] = []
-
 if st.button("Generuj instrukcje"):
     progress = st.progress(0, text="Przetwarzanie...")
     total = len(selected)
+    generated_files: list[Path] = []
 
     for i, pdf_path in enumerate(selected):
         data = extract_data(pdf_path)
@@ -78,17 +77,21 @@ if st.button("Generuj instrukcje"):
         progress.progress((i + 1) / total, text=f"Przetworzono {pdf_path.name}")
 
     progress.empty()
+    st.session_state["generated_files"] = generated_files
     st.success(f"Wygenerowano {len(generated_files)} plików.")
+
+generated_files = [
+    path for path in st.session_state.get("generated_files", []) if path.exists()
+]
 
 if generated_files:
     st.subheader("Gotowe instrukcje do pobrania")
     cols = st.columns(2)
     for idx, path in enumerate(generated_files):
-        with open(path, "rb") as f:
-            cols[idx % 2].download_button(
-                label=f"Pobierz {path.name}",
-                data=f,
-                file_name=path.name,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key=f"dl_{path.name}",
-            )
+        cols[idx % 2].download_button(
+            label=f"Pobierz {path.name}",
+            data=path.read_bytes(),
+            file_name=path.name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"dl_{path.name}",
+        )
