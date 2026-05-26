@@ -973,6 +973,89 @@ def set_row_heights(ws) -> None:
         ws.row_dimensions[row_idx].height = height
 
 
+# Komórki z tekstem o zmiennej długości, którym dopasowujemy wysokość wiersza.
+AUTOFIT_CELLS = [
+    "A11",
+    "B16", "F16", "B17", "F17",
+    "A40", "A41", "A42", "A43", "A44",
+    "A48", "A49", "A50", "A51",
+    "A54", "A55",
+    "A19", "A20", "A21", "A22", "A23", "A24", "A25", "A26",
+    "C29", "C30", "C31", "C32", "C33", "C34",
+    "A36", "A37",
+]
+
+
+def _cell_plain_text(cell) -> str:
+    value = cell.value
+    if value is None:
+        return ""
+    if value.__class__.__name__ == "CellRichText":
+        return "".join(getattr(block, "text", str(block)) for block in value)
+    return str(value)
+
+
+def _merged_range_for(ws, address: str):
+    for merged_range in ws.merged_cells.ranges:
+        if address in merged_range:
+            return merged_range
+    return None
+
+
+def autofit_text_rows(ws, addresses) -> None:
+    """Zwiększ wysokość wierszy tak, aby zmieścił się zawinięty tekst.
+
+    Działa tylko w górę (nigdy nie zmniejsza) — nie psuje istniejącego układu,
+    a usuwa potrzebę ręcznego rozsuwania komórek po wstawieniu długiego tekstu.
+    """
+    from openpyxl.utils import get_column_letter
+    from openpyxl.utils.cell import coordinate_to_tuple
+
+    default_h = ws.sheet_format.defaultRowHeight or 14.25
+    for address in addresses:
+        merged = _merged_range_for(ws, address)
+        if merged:
+            min_row, max_row = merged.min_row, merged.max_row
+            min_col, max_col = merged.min_col, merged.max_col
+        else:
+            row, col = coordinate_to_tuple(address)
+            min_row = max_row = row
+            min_col = max_col = col
+        top = ws.cell(row=min_row, column=min_col)
+        text = _cell_plain_text(top)
+        if not text.strip():
+            continue
+
+        usable_width = 0.0
+        for col in range(min_col, max_col + 1):
+            width = ws.column_dimensions[get_column_letter(col)].width or 8.43
+            if width >= 1:  # pomijamy wąskie kolumny-odstępy / ukryte
+                usable_width += width
+        chars_per_line = max(8, int(usable_width))
+
+        lines = 0
+        for segment in text.split("\n"):
+            segment = segment.rstrip()
+            lines += max(1, -(-len(segment) // chars_per_line))
+
+        font_size = top.font.size or 10
+        line_height = font_size * 1.4 + 1.5
+        required = lines * line_height + 4
+        num_rows = max_row - min_row + 1
+
+        current_total = 0.0
+        for row in range(min_row, max_row + 1):
+            current_total += ws.row_dimensions[row].height or default_h
+        if required <= current_total:
+            continue
+
+        per_row = required / num_rows
+        for row in range(min_row, max_row + 1):
+            existing = ws.row_dimensions[row].height or default_h
+            if per_row > existing:
+                ws.row_dimensions[row].height = round(per_row, 1)
+
+
 def _col_width_px(ws, col_letter: str) -> int:
     w = ws.column_dimensions[col_letter].width
     if w is None:
@@ -1065,10 +1148,10 @@ def populate_workbook(
     write_value(ws, CELL_MAP["product_name"], data.product_name)
     write_value(ws, CELL_MAP["revision_date"], data.revision_date)
     write_value(ws, CELL_MAP["hazards"], data.hazard_text)
-    write_value(ws, CELL_MAP["hand_protection"], data.hand_protection)
-    write_value(ws, CELL_MAP["respiratory_protection"], data.respiratory_protection)
-    write_value(ws, CELL_MAP["skin_protection"], data.skin_protection)
-    write_value(ws, CELL_MAP["eye_protection"], data.eye_protection)
+    write_value(ws, CELL_MAP["hand_protection"], data.hand_protection, append=True)
+    write_value(ws, CELL_MAP["respiratory_protection"], data.respiratory_protection, append=True)
+    write_value(ws, CELL_MAP["skin_protection"], data.skin_protection, append=True)
+    write_value(ws, CELL_MAP["eye_protection"], data.eye_protection, append=True)
     write_value(ws, CELL_MAP["first_aid_general"], data.first_aid_general, append=True)
     write_value(ws, CELL_MAP["first_aid_inhalation"], data.first_aid_inhalation, append=True)
     write_value(ws, CELL_MAP["first_aid_skin"], data.first_aid_skin, append=True)
@@ -1082,6 +1165,7 @@ def populate_workbook(
     write_value(ws, CELL_MAP["storage_1"], "\n".join(data.storage[:2]), append=True)
 
     set_row_heights(ws)
+    autofit_text_rows(ws, AUTOFIT_CELLS)
 
     ws._images = []
     static_assets = resolve_static_assets(assets_dir=assets_dir, temp_images_dir=temp_images_dir)
