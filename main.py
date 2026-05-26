@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 import shutil
 import unicodedata
@@ -911,58 +912,67 @@ def ensure_visible_style(cell) -> None:
         cell.font = font
 
 
-def set_row_heights(ws) -> None:
-    custom_heights = {
-        7: 36,
-        8: 36,
-        11: 96,
-        12: 96,
-        13: 96,
-        14: 96,
-        16: 84,
-        17: 84,
-        41: 54,
-        42: 54,
-        43: 54,
-        44: 54,
-        48: 48,
-        49: 54,
-        50: 54,
-        19: 32,
-        20: 32,
-        21: 32,
-        22: 32,
-        23: 32,
-        24: 32,
-        25: 32,
-        26: 32,
-        29: 28,
-        30: 28,
-        31: 28,
-        32: 28,
-        33: 28,
-        34: 32,
-        36: 42,
-        37: 42,
-        54: 42,
-        55: 42,
-    }
-    for row_idx, height in custom_heights.items():
-        ws.row_dimensions[row_idx].height = height
+_AUTOFIT_LINE_PT = 12.6        # ~jedna linia tekstu Arial 10 pt
+_AUTOFIT_PAD_PT = 2.0          # zapas pionowy na komórkę
+_AUTOFIT_CHAR_FUDGE = 0.9      # ułamek „znaków szerokości" realnie mieszczących się w linii
+_DEFAULT_COL_CHARS = 8.43
+GHS_BLOCK_ROW_PT = 32.0        # min. wysokość wiersza mieszczącego piktogram 40 px
 
 
-def _col_width_px(ws, col_letter: str) -> int:
-    w = ws.column_dimensions[col_letter].width
-    if w is None:
-        return 64
-    return int(w * 7 + 5)
+def autofit_row_heights(ws, addresses) -> None:
+    """Zwiększ wysokość wierszy, by zmieścił się zawinięty tekst wpisanych komórek.
+
+    Dotyczy wyłącznie komórek faktycznie wypełnianych danymi (`addresses`) oraz
+    ich scalonych bloków — statyczna treść szablonu (nagłówki, instrukcje pracy)
+    pozostaje nietknięta. Wysokości są tylko zwiększane (nigdy poniżej szablonu):
+    krótka treść zachowuje geometrię `wzor.xlsx`, a długa treść z karty sama się
+    rozsuwa — bez ręcznego poprawiania komórek po wygenerowaniu.
+    """
+    from openpyxl.utils import coordinate_to_tuple, get_column_letter
+
+    def col_chars(col: int) -> float:
+        width = ws.column_dimensions[get_column_letter(col)].width
+        return width if width else _DEFAULT_COL_CHARS
+
+    required: dict[int, float] = {}
+    seen: set[tuple[int, int]] = set()
+    for address in addresses:
+        row, col = coordinate_to_tuple(address)
+        r0, r1, c0, c1 = row, row, col, col
+        for mr in ws.merged_cells.ranges:
+            if mr.min_row <= row <= mr.max_row and mr.min_col <= col <= mr.max_col:
+                r0, r1, c0, c1 = mr.min_row, mr.max_row, mr.min_col, mr.max_col
+                break
+        if (r0, c0) in seen:
+            continue
+        seen.add((r0, c0))
+        value = ws.cell(row=r0, column=c0).value
+        if value is None:
+            continue
+        usable = max(sum(col_chars(c) for c in range(c0, c1 + 1)) * _AUTOFIT_CHAR_FUDGE, 1.0)
+        lines = 0
+        for segment in str(value).split("\n"):
+            seg = segment.strip()
+            lines += max(1, math.ceil(len(seg) / usable)) if seg else 1
+        per_row = (lines * _AUTOFIT_LINE_PT + _AUTOFIT_PAD_PT) / (r1 - r0 + 1)
+        for r in range(r0, r1 + 1):
+            if per_row > required.get(r, 0.0):
+                required[r] = per_row
+
+    for r, need in required.items():
+        current = ws.row_dimensions[r].height or 0.0
+        if need > current:
+            ws.row_dimensions[r].height = round(need, 1)
 
 
-def _row_height_px(ws, row_num: int) -> int:
-    h = ws.row_dimensions[row_num].height
-    if h is None:
-        return 16
-    return int(h * 4 / 3)
+def _fit_ghs_block(ws, n_pictograms: int) -> None:
+    """Zapewnij wysokość wierszy 11..14 na piktogramy GHS (2 na wiersz, 40 px)."""
+    if n_pictograms <= 0:
+        return
+    rows_used = min(math.ceil(n_pictograms / 2), 4)
+    for r in range(11, 11 + rows_used):
+        if (ws.row_dimensions[r].height or 0.0) < GHS_BLOCK_ROW_PT:
+            ws.row_dimensions[r].height = GHS_BLOCK_ROW_PT
 
 
 GHS_IMAGE_SIZE_PX = 40
@@ -996,30 +1006,35 @@ def populate_workbook(
     wb = load_workbook(output_path)
     ws = wb[wb.sheetnames[0]]
 
-    write_value(ws, CELL_MAP["producer"], data.producer)
-    write_value(ws, CELL_MAP["product_name"], data.product_name)
-    write_value(ws, CELL_MAP["revision_date"], data.revision_date)
+    written: list[str] = []
+
+    def put(key: str, value: str, append: bool = False) -> None:
+        addr = CELL_MAP[key]
+        write_value(ws, addr, value, append=append)
+        written.append(addr)
+
+    put("producer", data.producer)
+    put("product_name", data.product_name)
+    put("revision_date", data.revision_date)
     # A11 (scalona A11:G14): wpisz zwroty H tylko gdy są — w przeciwnym razie
     # zostaw placeholder/format szablonu nienaruszony.
     if (data.hazard_text or "").strip():
-        write_value(ws, CELL_MAP["hazards"], data.hazard_text)
-    write_value(ws, CELL_MAP["hand_protection"], data.hand_protection, append=True)
-    write_value(ws, CELL_MAP["respiratory_protection"], data.respiratory_protection, append=True)
-    write_value(ws, CELL_MAP["skin_protection"], data.skin_protection, append=True)
-    write_value(ws, CELL_MAP["eye_protection"], data.eye_protection, append=True)
-    write_value(ws, CELL_MAP["first_aid_general"], data.first_aid_general, append=True)
-    write_value(ws, CELL_MAP["first_aid_inhalation"], data.first_aid_inhalation, append=True)
-    write_value(ws, CELL_MAP["first_aid_skin"], data.first_aid_skin, append=True)
-    write_value(ws, CELL_MAP["first_aid_eyes"], data.first_aid_eyes, append=True)
-    write_value(ws, CELL_MAP["first_aid_ingestion"], data.first_aid_ingestion, append=True)
-    write_value(ws, CELL_MAP["fire_overview"], data.fire_overview, append=True)
-    write_value(ws, CELL_MAP["fire_suitable"], data.fire_suitable, append=True)
-    write_value(ws, CELL_MAP["fire_unsuitable"], data.fire_unsuitable, append=True)
-    write_value(ws, CELL_MAP["environmental_release"], data.environmental_release, append=True)
-    write_value(ws, CELL_MAP["handling_1"], "\n".join(data.handling), append=True)
-    write_value(ws, CELL_MAP["storage_1"], "\n".join(data.storage), append=True)
-
-    # NIE nadpisujemy wysokości wierszy — geometria pozostaje wierna wzor.xlsx.
+        put("hazards", data.hazard_text)
+    put("hand_protection", data.hand_protection, append=True)
+    put("respiratory_protection", data.respiratory_protection, append=True)
+    put("skin_protection", data.skin_protection, append=True)
+    put("eye_protection", data.eye_protection, append=True)
+    put("first_aid_general", data.first_aid_general, append=True)
+    put("first_aid_inhalation", data.first_aid_inhalation, append=True)
+    put("first_aid_skin", data.first_aid_skin, append=True)
+    put("first_aid_eyes", data.first_aid_eyes, append=True)
+    put("first_aid_ingestion", data.first_aid_ingestion, append=True)
+    put("fire_overview", data.fire_overview, append=True)
+    put("fire_suitable", data.fire_suitable, append=True)
+    put("fire_unsuitable", data.fire_unsuitable, append=True)
+    put("environmental_release", data.environmental_release, append=True)
+    put("handling_1", "\n".join(data.handling), append=True)
+    put("storage_1", "\n".join(data.storage), append=True)
 
     ws._images = []
     static_assets = resolve_static_assets(assets_dir=assets_dir, temp_images_dir=temp_images_dir)
@@ -1027,10 +1042,17 @@ def populate_workbook(
         add_image(ws, static_assets.get(key, Path()), anchor, width=42, height=42)
 
     ghs_assets = resolve_ghs_assets(assets_dir=assets_dir)
+    placed_ghs = 0
     for code, anchor, size in layout_ghs_images(ws, data.hazard_pictograms):
         asset = ghs_assets.get(code)
         if asset:
             add_image(ws, asset, anchor, width=size, height=size)
+            placed_ghs += 1
+
+    # Dopasuj wysokość wierszy do treści: długi tekst rośnie sam, krótki
+    # zachowuje geometrię szablonu (wysokości tylko rosną, nigdy nie maleją).
+    autofit_row_heights(ws, written)
+    _fit_ghs_block(ws, placed_ghs)
 
     # add separate sheet for NDS (exposure limit) from section 8.1
     nds_ws = wb.create_sheet(title="NDS")
