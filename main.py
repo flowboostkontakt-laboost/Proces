@@ -977,6 +977,49 @@ def _fit_ghs_block(ws, n_pictograms: int) -> None:
 
 GHS_IMAGE_SIZE_PX = 40
 
+# Piktogramy środków ochrony / zakazów: stały rozmiar 1,5 × 1,5 cm i kotwica
+# wyśrodkowana w komórce, żeby ikona nie „wchodziła" na sąsiednie wiersze.
+EMU_PER_PIXEL = 9525
+EMU_PER_CM = 360000
+STATIC_IMAGE_SIZE_CM = 1.5
+STATIC_IMAGE_SIZE_EMU = int(round(STATIC_IMAGE_SIZE_CM * EMU_PER_CM))   # 540000 = dokładnie 1,5 cm
+STATIC_IMAGE_SIZE_PX = int(round(STATIC_IMAGE_SIZE_CM / 2.54 * 96))      # ~57 px (img.width/height)
+STATIC_IMAGE_MIN_MARGIN_PX = 3.0
+
+
+def _col_width_px(ws, col_letter: str) -> float:
+    width = ws.column_dimensions[col_letter].width or _DEFAULT_COL_CHARS
+    return width * 7.0 + 5.0
+
+
+def _row_height_px(ws, row: int) -> float:
+    height = ws.row_dimensions[row].height or (ws.sheet_format.defaultRowHeight or 15.0)
+    return height * 96.0 / 72.0
+
+
+def static_image_anchor(ws, address: str) -> OneCellAnchor:
+    """Kotwica komórkowa wyśrodkowująca piktogram 1,5 cm w jego komórce.
+
+    Offset pionowy/poziomy dosuwa ikonę do środka komórki (z minimalnym
+    marginesem), dzięki czemu nie nachodzi na sąsiednie wiersze ani nagłówki.
+    Gdy komórka jest niższa niż ikona (np. bloki zakazów), zostaje sam margines
+    górny — ikona mieści się w scalonym bloku, nie dotykając wiersza powyżej.
+    """
+    from openpyxl.utils import coordinate_to_tuple, get_column_letter
+
+    row, col = coordinate_to_tuple(address)
+    col_letter = get_column_letter(col)
+    off_x = max((_col_width_px(ws, col_letter) - STATIC_IMAGE_SIZE_PX) / 2.0, STATIC_IMAGE_MIN_MARGIN_PX)
+    off_y = max((_row_height_px(ws, row) - STATIC_IMAGE_SIZE_PX) / 2.0, STATIC_IMAGE_MIN_MARGIN_PX)
+    marker = AnchorMarker(
+        col=col - 1,
+        row=row - 1,
+        colOff=int(off_x * EMU_PER_PIXEL),
+        rowOff=int(off_y * EMU_PER_PIXEL),
+    )
+    ext = XDRPositiveSize2D(STATIC_IMAGE_SIZE_EMU, STATIC_IMAGE_SIZE_EMU)
+    return OneCellAnchor(_from=marker, ext=ext)
+
 
 def layout_ghs_images(ws, pictograms: list[str]) -> list[tuple[str, OneCellAnchor | str, int]]:
     """Rozmieść piktogramy GHS w bloku zagrożeń A11:G14.
@@ -1039,7 +1082,13 @@ def populate_workbook(
     ws._images = []
     static_assets = resolve_static_assets(assets_dir=assets_dir, temp_images_dir=temp_images_dir)
     for key, anchor in STATIC_IMAGE_ANCHORS.items():
-        add_image(ws, static_assets.get(key, Path()), anchor, width=42, height=42)
+        add_image(
+            ws,
+            static_assets.get(key, Path()),
+            static_image_anchor(ws, anchor),
+            width=STATIC_IMAGE_SIZE_PX,
+            height=STATIC_IMAGE_SIZE_PX,
+        )
 
     ghs_assets = resolve_ghs_assets(assets_dir=assets_dir)
     placed_ghs = 0
