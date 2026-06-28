@@ -3,8 +3,8 @@
 Konta pochodzą z dwóch miejsc i są łączone:
 1. Sekrety [auth] — konta "awaryjne" (bootstrap), np. `admin`. Zawsze działają,
    nawet gdy baza jest niedostępna lub pusta — chronią przed zablokowaniem się.
-2. MongoDB (users_store) — użytkownicy dodawani z panelu administratora; zapis
-   trwały, przeżywa restart aplikacji.
+2. Supabase / PostgreSQL (users_store) — użytkownicy dodawani z panelu
+   administratora; zapis trwały, przeżywa restart aplikacji.
 
 Konta z sekretów mają priorytet — nie da się ich nadpisać kontem z bazy.
 Administratorem jest: każde konto z sekretów [auth] ORAZ konto z bazy z flagą
@@ -66,7 +66,7 @@ def _load_auth_config() -> dict:
 
 
 def _merged_credentials(bootstrap: dict) -> dict:
-    """Łączy konta z bazy (MongoDB) z kontami awaryjnymi z sekretów.
+    """Łączy konta z bazy (Supabase) z kontami awaryjnymi z sekretów.
 
     Sekrety wygrywają — zapewnia to dostęp nawet gdy baza jest niedostępna.
     """

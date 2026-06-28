@@ -33,15 +33,16 @@ i nie trafia do repozytorium.
 Konta pochodzą z dwóch źródeł (łączonych):
 1. Sekrety `[auth]` — konta awaryjne (bootstrap), np. `admin`. Działają zawsze,
    nawet gdy baza jest pusta/niedostępna. Każde konto z sekretów = administrator.
-2. MongoDB (`[mongo]`) — użytkownicy dodawani z panelu administratora w aplikacji;
-   zapis trwały, przeżywa restart. Konto może mieć flagę admina (`is_admin`).
+2. Supabase / PostgreSQL (`[supabase]`) — użytkownicy dodawani z panelu
+   administratora w aplikacji; zapis trwały, przeżywa restart. Konto może mieć
+   flagę administratora (`is_admin`).
 
 ### Panel administratora (w aplikacji)
 Po zalogowaniu administrator widzi sekcję **„Zarządzanie użytkownikami"**:
 dodawanie kont, reset hasła, nadawanie/odbieranie uprawnień admina, usuwanie.
-Nowe konta zapisują się w MongoDB i są od razu gotowe do logowania.
-Wymaga skonfigurowanej sekcji `[mongo]` w sekretach (connection string z
-MongoDB Atlas → Connect → Drivers).
+Nowe konta zapisują się w Supabase (PostgreSQL) i są od razu gotowe do logowania.
+Wymaga skonfigurowanej sekcji `[supabase]` w sekretach (connection string z
+Supabase → Connect → tryb "Session pooler"). Tabela `app_users` tworzy się sama.
 
 ### Konto awaryjne przez skrypt
 `python tworz_uzytkownika.py` generuje blok `[auth.credentials.usernames.<login>]`
@@ -53,8 +54,8 @@ poza zakresem (do podziału ręcznego). Instalacja zależności:
 
 ## Project Layout
 - `app.py` — Streamlit UI entry point
-- `auth.py` — bramka logowania (konta z sekretów + MongoDB, hasła bcrypt)
-- `users_store.py` — trwały magazyn użytkowników w MongoDB
+- `auth.py` — bramka logowania (konta z sekretów + Supabase, hasła bcrypt)
+- `users_store.py` — trwały magazyn użytkowników w Supabase (PostgreSQL)
 - `admin_panel.py` — panel administratora (dodawanie/edycja/usuwanie kont)
 - `tworz_uzytkownika.py` — skrypt do generowania konta awaryjnego w sekretach
 - `.streamlit/secrets.toml.example` — wzór sekretów (klucz API + konta [auth])

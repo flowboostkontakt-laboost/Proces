@@ -5,4 +5,5 @@ Pillow
 streamlit
 streamlit-authenticator>=0.3.2
 bcrypt
-pymongo[srv]>=4.6
+SQLAlchemy>=2.0
+psycopg2-binary>=2.9

@@ -1,7 +1,7 @@
 """Panel administratora — dodawanie / edycja / usuwanie użytkowników.
 
 Renderowany tylko dla zalogowanych administratorów (patrz auth.is_admin).
-Konta zapisywane są w MongoDB (users_store).
+Konta zapisywane są w Supabase / PostgreSQL (users_store).
 """
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ def render(current_username: str) -> None:
     with st.expander("👤 Zarządzanie użytkownikami (administrator)", expanded=False):
         if not users_store.is_configured():
             st.warning(
-                "Trwały magazyn użytkowników (MongoDB) nie jest skonfigurowany. "
-                "Dodaj sekcję [mongo] z polem `uri` w sekretach aplikacji, aby "
+                "Trwały magazyn użytkowników (Supabase) nie jest skonfigurowany. "
+                "Dodaj sekcję [supabase] z polem `uri` w sekretach aplikacji, aby "
                 "dodawać konta z poziomu aplikacji."
             )
             return
@@ -24,8 +24,9 @@ def render(current_username: str) -> None:
             users = users_store.list_users()
         except Exception as exc:  # połączenie / connection string
             st.error(
-                "Nie udało się połączyć z bazą użytkowników. Sprawdź [mongo].uri "
-                "w sekretach (oraz dostęp sieciowy w MongoDB Atlas → Network Access)."
+                "Nie udało się połączyć z bazą użytkowników. Sprawdź [supabase].uri "
+                "w sekretach (connection string z trybu Session pooler: "
+                "Supabase → Connect)."
             )
             st.caption(f"Szczegóły techniczne: {exc}")
             return
