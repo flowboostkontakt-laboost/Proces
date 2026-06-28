@@ -4,28 +4,41 @@ Konta dodawane z panelu administratora zapisują się tutaj i przeżywają
 restart aplikacji (w przeciwieństwie do plików na Streamlit Cloud).
 Tabela `app_users` tworzona jest automatycznie przy pierwszym połączeniu.
 
-Konfiguracja w sekretach:
+Konfiguracja w sekretach — dwa równoważne sposoby:
 
+    # A) osobne pola (zalecane — bezpieczne dla haseł ze znakami @ ? itp.)
+    [supabase]
+    host = "aws-0-<region>.pooler.supabase.com"
+    port = 5432
+    user = "postgres.<ref>"
+    password = "twoje-haslo-bazy"
+    database = "postgres"
+
+    # B) gotowy connection string (hasło musi być zakodowane URL-em)
     [supabase]
     uri = "postgresql://postgres.<ref>:HASLO@aws-0-<region>.pooler.supabase.com:5432/postgres"
 
-Użyj connection stringa z trybu **Session pooler** (Supabase → Connect),
-bo jest dostępny po IPv4 — tak łączy się Streamlit Cloud.
+Użyj trybu **Session pooler** (Supabase → Connect) — działa po IPv4, tak jak
+łączy się Streamlit Cloud.
 """
 from __future__ import annotations
 
 import bcrypt
 import streamlit as st
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import URL
 
 TABLE = "app_users"
 MIN_PASSWORD_LEN = 6
 
-
-def _get_uri() -> str | None:
-    if "supabase" in st.secrets:
-        return st.secrets["supabase"].get("uri") or None
-    return st.secrets.get("DATABASE_URL") or None
+CREATE_TABLE_SQL = (
+    f"CREATE TABLE IF NOT EXISTS {TABLE} ("
+    "username TEXT PRIMARY KEY, "
+    "name TEXT, "
+    "email TEXT, "
+    "password TEXT NOT NULL, "
+    "is_admin BOOLEAN NOT NULL DEFAULT FALSE)"
+)
 
 
 def _normalize(uri: str) -> str:
@@ -35,31 +48,45 @@ def _normalize(uri: str) -> str:
     return uri
 
 
+def _make_url() -> str | None:
+    """Składa connection string z sekretów: pełny `uri` albo osobne pola."""
+    conf = st.secrets["supabase"] if "supabase" in st.secrets else None
+    if conf:
+        if conf.get("uri"):
+            return _normalize(str(conf["uri"]))
+        if conf.get("host") and conf.get("password"):
+            return URL.create(
+                "postgresql+psycopg2",
+                username=str(conf.get("user", "postgres")),
+                password=str(conf["password"]),
+                host=str(conf["host"]),
+                port=int(conf.get("port", 5432)),
+                database=str(conf.get("database", "postgres")),
+            ).render_as_string(hide_password=False)
+    if st.secrets.get("DATABASE_URL"):
+        return _normalize(str(st.secrets["DATABASE_URL"]))
+    return None
+
+
 def is_configured() -> bool:
-    return bool(_get_uri())
+    try:
+        return bool(_make_url())
+    except Exception:
+        return False
 
 
 @st.cache_resource(show_spinner=False)
 def _engine(uri: str):
-    eng = create_engine(_normalize(uri), pool_pre_ping=True)
+    eng = create_engine(uri, pool_pre_ping=True, connect_args={"connect_timeout": 10})
     with eng.begin() as conn:
-        conn.execute(
-            text(
-                f"CREATE TABLE IF NOT EXISTS {TABLE} ("
-                "username TEXT PRIMARY KEY, "
-                "name TEXT, "
-                "email TEXT, "
-                "password TEXT NOT NULL, "
-                "is_admin BOOLEAN NOT NULL DEFAULT FALSE)"
-            )
-        )
+        conn.execute(text(CREATE_TABLE_SQL))
     return eng
 
 
 def _eng():
-    uri = _get_uri()
+    uri = _make_url()
     if not uri:
-        raise RuntimeError("Brak konfiguracji Supabase (sekcja [supabase] uri w sekretach).")
+        raise RuntimeError("Brak konfiguracji Supabase (sekcja [supabase] w sekretach).")
     return _engine(uri)
 
 
@@ -110,10 +137,7 @@ def add_user(username: str, name: str, email: str, plain: str, is_admin: bool = 
         if exists:
             raise ValueError(f"Użytkownik '{username}' już istnieje.")
         conn.execute(
-            text(
-                f"INSERT INTO {TABLE} ({_COLS}) "
-                "VALUES (:u, :n, :e, :p, :a)"
-            ),
+            text(f"INSERT INTO {TABLE} ({_COLS}) VALUES (:u, :n, :e, :p, :a)"),
             {
                 "u": username,
                 "n": (name or "").strip() or username,
