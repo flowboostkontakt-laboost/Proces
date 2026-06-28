@@ -18,6 +18,7 @@ try:
 except Exception:
     pass  # brak pliku secrets.toml lokalnie — używamy env vars
 
+from auth import require_login
 from main import (
     ASSETS_DIR,
     BASE_DIR,
@@ -34,6 +35,9 @@ from main import (
 
 st.set_page_config(page_title="Generator Instrukcji BHP", layout="centered")
 st.title("Generator Instrukcji BHP")
+
+# Bramka logowania — niezalogowani nie zobaczą generatora.
+require_login()
 
 INPUT_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)

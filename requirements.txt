@@ -3,3 +3,4 @@ pdfplumber
 openpyxl
 Pillow
 streamlit
+streamlit-authenticator>=0.3.2

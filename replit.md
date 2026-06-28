@@ -20,12 +20,33 @@ Opcjonalnie:
 
 - `CLAUDE_MODEL` — model do ekstrakcji (domyślnie `claude-sonnet-4-6`).
 
+## Logowanie (kontrola dostępu)
+Aplikacja jest zabezpieczona logowaniem (biblioteka `streamlit-authenticator`).
+Niezalogowani użytkownicy widzą tylko formularz logowania — generator jest
+niedostępny.
+
+Konta i hasła (HASH bcrypt) trzymane są w sekcji `[auth]` sekretów aplikacji
+(Streamlit Cloud → Settings → Secrets), lokalnie w `.streamlit/secrets.toml`.
+Wzór: `.streamlit/secrets.toml.example`. Plik `secrets.toml` jest w `.gitignore`
+i nie trafia do repozytorium.
+
+Dodanie / zmiana użytkownika:
+1. `python tworz_uzytkownika.py` — podaj login, nazwę, e-mail i hasło.
+2. Skopiuj wygenerowany fragment `[auth.credentials.usernames.<login>]`
+   do sekretów aplikacji (lub `.streamlit/secrets.toml`).
+3. Zapisz — Streamlit przeładuje aplikację z nowym kontem.
+
+Usunięcie użytkownika = usunięcie jego sekcji z sekretów.
+
 Limit dla automatycznej ekstrakcji: PDF do ~30 MB / 100 stron. Większe skany
 poza zakresem (do podziału ręcznego). Instalacja zależności:
 `pip install -r requirements.txt`.
 
 ## Project Layout
 - `app.py` — Streamlit UI entry point
+- `auth.py` — bramka logowania (konta użytkowników, hasła bcrypt)
+- `tworz_uzytkownika.py` — skrypt do generowania danych nowego użytkownika
+- `.streamlit/secrets.toml.example` — wzór sekretów (klucz API + konta [auth])
 - `extraction_ai.py` — ekstrakcja danych z karty przez Claude API (PDF/skan)
 - `main.py` — orkiestracja ekstrakcji i wypełnianie szablonu Excel
 - `assets/` — Static assets used in generated workbooks
