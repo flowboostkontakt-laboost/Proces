@@ -30,13 +30,22 @@ Konta i hasła (HASH bcrypt) trzymane są w sekcji `[auth]` sekretów aplikacji
 Wzór: `.streamlit/secrets.toml.example`. Plik `secrets.toml` jest w `.gitignore`
 i nie trafia do repozytorium.
 
-Dodanie / zmiana użytkownika:
-1. `python tworz_uzytkownika.py` — podaj login, nazwę, e-mail i hasło.
-2. Skopiuj wygenerowany fragment `[auth.credentials.usernames.<login>]`
-   do sekretów aplikacji (lub `.streamlit/secrets.toml`).
-3. Zapisz — Streamlit przeładuje aplikację z nowym kontem.
+Konta pochodzą z dwóch źródeł (łączonych):
+1. Sekrety `[auth]` — konta awaryjne (bootstrap), np. `admin`. Działają zawsze,
+   nawet gdy baza jest pusta/niedostępna. Każde konto z sekretów = administrator.
+2. MongoDB (`[mongo]`) — użytkownicy dodawani z panelu administratora w aplikacji;
+   zapis trwały, przeżywa restart. Konto może mieć flagę admina (`is_admin`).
 
-Usunięcie użytkownika = usunięcie jego sekcji z sekretów.
+### Panel administratora (w aplikacji)
+Po zalogowaniu administrator widzi sekcję **„Zarządzanie użytkownikami"**:
+dodawanie kont, reset hasła, nadawanie/odbieranie uprawnień admina, usuwanie.
+Nowe konta zapisują się w MongoDB i są od razu gotowe do logowania.
+Wymaga skonfigurowanej sekcji `[mongo]` w sekretach (connection string z
+MongoDB Atlas → Connect → Drivers).
+
+### Konto awaryjne przez skrypt
+`python tworz_uzytkownika.py` generuje blok `[auth.credentials.usernames.<login>]`
+do wklejenia w sekretach — przydatne do utworzenia pierwszego konta admina.
 
 Limit dla automatycznej ekstrakcji: PDF do ~30 MB / 100 stron. Większe skany
 poza zakresem (do podziału ręcznego). Instalacja zależności:
@@ -44,8 +53,10 @@ poza zakresem (do podziału ręcznego). Instalacja zależności:
 
 ## Project Layout
 - `app.py` — Streamlit UI entry point
-- `auth.py` — bramka logowania (konta użytkowników, hasła bcrypt)
-- `tworz_uzytkownika.py` — skrypt do generowania danych nowego użytkownika
+- `auth.py` — bramka logowania (konta z sekretów + MongoDB, hasła bcrypt)
+- `users_store.py` — trwały magazyn użytkowników w MongoDB
+- `admin_panel.py` — panel administratora (dodawanie/edycja/usuwanie kont)
+- `tworz_uzytkownika.py` — skrypt do generowania konta awaryjnego w sekretach
 - `.streamlit/secrets.toml.example` — wzór sekretów (klucz API + konta [auth])
 - `extraction_ai.py` — ekstrakcja danych z karty przez Claude API (PDF/skan)
 - `main.py` — orkiestracja ekstrakcji i wypełnianie szablonu Excel

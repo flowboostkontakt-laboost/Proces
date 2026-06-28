@@ -4,3 +4,5 @@ openpyxl
 Pillow
 streamlit
 streamlit-authenticator>=0.3.2
+bcrypt
+pymongo[srv]>=4.6

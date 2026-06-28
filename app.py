@@ -37,7 +37,13 @@ st.set_page_config(page_title="Generator Instrukcji BHP", layout="centered")
 st.title("Generator Instrukcji BHP")
 
 # Bramka logowania — niezalogowani nie zobaczą generatora.
-require_login()
+_name, _username, _is_admin, _authenticator = require_login()
+
+# Panel zarządzania użytkownikami — tylko dla administratora.
+if _is_admin:
+    import admin_panel
+
+    admin_panel.render(_username)
 
 INPUT_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
