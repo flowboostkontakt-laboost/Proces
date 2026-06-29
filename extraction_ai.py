@@ -46,8 +46,9 @@ _PROPS: dict[str, dict] = {
     "producer": {
         "type": "string",
         "description": (
-            "Sekcja 1.3 — dostawca karty: nazwa firmy i adres. "
-            "Pomiń telefony, faksy, e-maile, numery alarmowe."
+            "Sekcja 1.3 — dostawca karty: WYŁĄCZNIE nazwa firmy (producenta/"
+            "dostawcy). Pomiń adres, ulicę, kod pocztowy, miasto, kraj, "
+            "telefony, faksy, e-maile i numery alarmowe — sama nazwa firmy."
         ),
     },
     "revision_date": {
@@ -133,7 +134,14 @@ _PROPS: dict[str, dict] = {
     },
     "environmental_release": {
         "type": "string",
-        "description": "Sekcja 6.3 — metody i materiały zapobiegające skażeniu / oczyszczanie.",
+        "description": (
+            "Postępowanie w przypadku niezamierzonego uwolnienia do środowiska "
+            "— POŁĄCZ sekcje 6.1 (indywidualne środki ostrożności, wyposażenie "
+            "ochronne, procedury w sytuacji awaryjnej), 6.2 (środki ostrożności "
+            "w zakresie ochrony środowiska) oraz 6.3 (metody i materiały "
+            "zapobiegające skażeniu / oczyszczanie). Przepisz istotne treści ze "
+            "wszystkich trzech podsekcji."
+        ),
     },
     "handling": {
         "type": "array",
@@ -306,7 +314,9 @@ def extract_data_ai(pdf_path: Path):
                 continue
             code = str(st.get("code", "")).strip().upper()
             text = str(st.get("text", "")).strip()
-            line = f"{code} - {text}".strip(" -")
+            # Wg uwag: zostawiamy sam opis słowny zagrożenia (bez kodu H/EUH).
+            # Kody zbieramy osobno — służą do doboru piktogramów GHS.
+            line = text or code
             if line:
                 hazard_lines.append(line)
             if code:
@@ -329,9 +339,15 @@ def extract_data_ai(pdf_path: Path):
             derived |= H_TO_GHS.get(code, set())
         pictograms = sorted(derived)
 
+    # Producent: dla pewności bierzemy samą nazwę firmy (pierwsza niepusta linia),
+    # gdyby model mimo instrukcji dołączył adres w kolejnych wierszach.
+    producer = s("producer")
+    if producer:
+        producer = next((ln.strip() for ln in producer.splitlines() if ln.strip()), "")
+
     return ExtractedData(
         product_name=s("product_name"),
-        producer=s("producer"),
+        producer=producer,
         revision_date=s("revision_date"),
         hazard_text=hazard_text,
         hazard_codes=hazard_codes,

@@ -83,6 +83,31 @@ HAZARD_IMAGE_ANCHORS = ["F11", "G11", "H11", "I11"]
 APPEND_CELLS = {"A40", "A41", "A42", "A43", "A44", "A48", "A49", "A50", "A51", "A54", "A55"}
 
 
+# Teksty stałe wpisywane zawsze (wg uwag: „dodać na stałe do wzoru instrukcji").
+# Te komórki NIE są wypełniane danymi z karty — zawierają standardowe formułki.
+FIRST_AID_GENERAL_TEXT = (
+    "Okazać lekarzowi kartę charakterystyki lub etykietę produktu. Należy "
+    "przestrzegać uwag dotyczących bezpieczeństwa i użytkowania zamieszczonych "
+    "na etykiecie. Przy wystąpieniu symptomów lub przy wypadkach zasięgnąć rady "
+    "lekarza. Usunąć poszkodowanego ze strefy zagrożenia. Jeśli poszkodowany "
+    "jest nieprzytomny ułożyć w pozycji bocznej bezpiecznej, kontrolować oddech."
+)
+HANDLING_TEXT = (
+    "Stosować środki ochrony indywidualnej. Zapewnić odpowiednią wentylację "
+    "otoczenia. Nie jeść, nie pić, nie palić w czasie pracy. Umyć ręce po użyciu. "
+    "Zanieczyszczoną odzież umyć przed ponownym użyciem."
+)
+STORAGE_TEXT = (
+    "Przechowywać w oryginalnych, właściwie oznakowanych, szczelnie zamkniętych "
+    "opakowaniach w chłodnym, suchym, dobrze wentylowanym miejscu. Trzymać z dala "
+    "od produktów spożywczych."
+)
+
+# Wg uwag: czcionka 11 w sekcjach „Czynności przed rozpoczęciem pracy" (A19:A26)
+# i „Czynności w czasie pracy" (C29:C34) — to statyczny tekst szablonu.
+SECTION_FONT11_CELLS = [f"A{r}" for r in range(19, 27)] + [f"C{r}" for r in range(29, 35)]
+
+
 GHS_LABELS = {
     "GHS01": "Wybuch",
     "GHS02": "Płomień",
@@ -916,7 +941,7 @@ _AUTOFIT_LINE_PT = 12.6        # ~jedna linia tekstu Arial 10 pt
 _AUTOFIT_PAD_PT = 2.0          # zapas pionowy na komórkę
 _AUTOFIT_CHAR_FUDGE = 0.9      # ułamek „znaków szerokości" realnie mieszczących się w linii
 _DEFAULT_COL_CHARS = 8.43
-GHS_BLOCK_ROW_PT = 32.0        # min. wysokość wiersza mieszczącego piktogram 40 px
+GHS_BLOCK_ROW_PT = 40.0        # min. wysokość wiersza mieszczącego piktogram GHS 1,3 cm (~49 px)
 
 
 def autofit_row_heights(ws, addresses) -> None:
@@ -975,16 +1000,32 @@ def _fit_ghs_block(ws, n_pictograms: int) -> None:
             ws.row_dimensions[r].height = GHS_BLOCK_ROW_PT
 
 
-GHS_IMAGE_SIZE_PX = 40
-
-# Piktogramy środków ochrony / zakazów: stały rozmiar 1,5 × 1,5 cm i kotwica
-# wyśrodkowana w komórce, żeby ikona nie „wchodziła" na sąsiednie wiersze.
 EMU_PER_PIXEL = 9525
 EMU_PER_CM = 360000
-STATIC_IMAGE_SIZE_CM = 1.5
-STATIC_IMAGE_SIZE_EMU = int(round(STATIC_IMAGE_SIZE_CM * EMU_PER_CM))   # 540000 = dokładnie 1,5 cm
-STATIC_IMAGE_SIZE_PX = int(round(STATIC_IMAGE_SIZE_CM / 2.54 * 96))      # ~57 px (img.width/height)
 STATIC_IMAGE_MIN_MARGIN_PX = 3.0
+
+
+def _cm_to_px(cm: float) -> int:
+    return int(round(cm / 2.54 * 96))
+
+
+# Rozmiary piktogramów wg uwag recenzenta (kotwica wyśrodkowana w komórce):
+# - środki ochrony (rękawice, maska, odzież, okulary): 2,0 × 2,0 cm
+# - zakazy (zakaz palenia / jedzenia): 1,75 × 1,75 cm
+# - piktogramy GHS (zagrożenia, blok A11): 1,3 × 1,3 cm
+PROTECTION_IMAGE_SIZE_CM = 2.0
+PROHIBITION_IMAGE_SIZE_CM = 1.75
+STATIC_IMAGE_SIZES_CM = {
+    "gloves": PROTECTION_IMAGE_SIZE_CM,
+    "respirator": PROTECTION_IMAGE_SIZE_CM,
+    "clothing": PROTECTION_IMAGE_SIZE_CM,
+    "goggles": PROTECTION_IMAGE_SIZE_CM,
+    "no_smoking": PROHIBITION_IMAGE_SIZE_CM,
+    "no_food": PROHIBITION_IMAGE_SIZE_CM,
+}
+
+GHS_IMAGE_SIZE_CM = 1.3
+GHS_IMAGE_SIZE_PX = _cm_to_px(GHS_IMAGE_SIZE_CM)   # ~49 px
 
 
 def _col_width_px(ws, col_letter: str) -> float:
@@ -997,8 +1038,8 @@ def _row_height_px(ws, row: int) -> float:
     return height * 96.0 / 72.0
 
 
-def static_image_anchor(ws, address: str) -> OneCellAnchor:
-    """Kotwica komórkowa wyśrodkowująca piktogram 1,5 cm w jego komórce.
+def static_image_anchor(ws, address: str, size_cm: float) -> OneCellAnchor:
+    """Kotwica komórkowa wyśrodkowująca piktogram `size_cm` cm w jego komórce.
 
     Offset pionowy/poziomy dosuwa ikonę do środka komórki (z minimalnym
     marginesem), dzięki czemu nie nachodzi na sąsiednie wiersze ani nagłówki.
@@ -1007,17 +1048,19 @@ def static_image_anchor(ws, address: str) -> OneCellAnchor:
     """
     from openpyxl.utils import coordinate_to_tuple, get_column_letter
 
+    size_px = _cm_to_px(size_cm)
+    size_emu = int(round(size_cm * EMU_PER_CM))
     row, col = coordinate_to_tuple(address)
     col_letter = get_column_letter(col)
-    off_x = max((_col_width_px(ws, col_letter) - STATIC_IMAGE_SIZE_PX) / 2.0, STATIC_IMAGE_MIN_MARGIN_PX)
-    off_y = max((_row_height_px(ws, row) - STATIC_IMAGE_SIZE_PX) / 2.0, STATIC_IMAGE_MIN_MARGIN_PX)
+    off_x = max((_col_width_px(ws, col_letter) - size_px) / 2.0, STATIC_IMAGE_MIN_MARGIN_PX)
+    off_y = max((_row_height_px(ws, row) - size_px) / 2.0, STATIC_IMAGE_MIN_MARGIN_PX)
     marker = AnchorMarker(
         col=col - 1,
         row=row - 1,
         colOff=int(off_x * EMU_PER_PIXEL),
         rowOff=int(off_y * EMU_PER_PIXEL),
     )
-    ext = XDRPositiveSize2D(STATIC_IMAGE_SIZE_EMU, STATIC_IMAGE_SIZE_EMU)
+    ext = XDRPositiveSize2D(size_emu, size_emu)
     return OneCellAnchor(_from=marker, ext=ext)
 
 
@@ -1049,6 +1092,15 @@ def populate_workbook(
     wb = load_workbook(output_path)
     ws = wb[wb.sheetnames[0]]
 
+    # Czcionka 11 w sekcjach czynności (tekst statyczny szablonu) — wg uwag.
+    for addr in SECTION_FONT11_CELLS:
+        cell = ws[addr]
+        if cell.__class__.__name__ == "MergedCell":
+            continue
+        section_font = copy(cell.font)
+        section_font.size = 11
+        cell.font = section_font
+
     written: list[str] = []
 
     def put(key: str, value: str, append: bool = False) -> None:
@@ -1067,7 +1119,8 @@ def populate_workbook(
     put("respiratory_protection", data.respiratory_protection, append=True)
     put("skin_protection", data.skin_protection, append=True)
     put("eye_protection", data.eye_protection, append=True)
-    put("first_aid_general", data.first_aid_general, append=True)
+    # A40 „Uwagi ogólne" — stały tekst, BEZ danych z karty (wg uwag recenzenta).
+    put("first_aid_general", FIRST_AID_GENERAL_TEXT, append=True)
     put("first_aid_inhalation", data.first_aid_inhalation, append=True)
     put("first_aid_skin", data.first_aid_skin, append=True)
     put("first_aid_eyes", data.first_aid_eyes, append=True)
@@ -1076,18 +1129,21 @@ def populate_workbook(
     put("fire_suitable", data.fire_suitable, append=True)
     put("fire_unsuitable", data.fire_unsuitable, append=True)
     put("environmental_release", data.environmental_release, append=True)
-    put("handling_1", "\n".join(data.handling), append=True)
-    put("storage_1", "\n".join(data.storage), append=True)
+    # A54/A55 — stałe formułki (postępowanie z produktem, magazynowanie).
+    put("handling_1", HANDLING_TEXT, append=True)
+    put("storage_1", STORAGE_TEXT, append=True)
 
     ws._images = []
     static_assets = resolve_static_assets(assets_dir=assets_dir, temp_images_dir=temp_images_dir)
     for key, anchor in STATIC_IMAGE_ANCHORS.items():
+        size_cm = STATIC_IMAGE_SIZES_CM.get(key, PROTECTION_IMAGE_SIZE_CM)
+        size_px = _cm_to_px(size_cm)
         add_image(
             ws,
             static_assets.get(key, Path()),
-            static_image_anchor(ws, anchor),
-            width=STATIC_IMAGE_SIZE_PX,
-            height=STATIC_IMAGE_SIZE_PX,
+            static_image_anchor(ws, anchor, size_cm),
+            width=size_px,
+            height=size_px,
         )
 
     ghs_assets = resolve_ghs_assets(assets_dir=assets_dir)
