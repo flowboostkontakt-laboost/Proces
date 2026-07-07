@@ -219,6 +219,17 @@ class ExtractedData:
         self.handling = self.handling or []
 
 
+# Znaki sterujące niedozwolone w XML/openpyxl (rzucają IllegalCharacterError
+# przy zapisie komórki). Czasem trafiają do tekstu wyciągniętego z PDF/AI.
+_ILLEGAL_XML_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _clean_xml(value):
+    if isinstance(value, str):
+        return _ILLEGAL_XML_RE.sub("", value)
+    return value
+
+
 def normalize_text(text: str) -> str:
     text = text.replace("\r", "\n")
     text = re.sub(r"[ \t]+", " ", text)
@@ -891,6 +902,7 @@ def _rich_append(existing: str | None, new: str) -> CellRichText:
 
 
 def write_value(ws, address: str, value: str, append: bool = False) -> None:
+    value = _clean_xml(value)
     target = ws[address]
     if target.__class__.__name__ == "MergedCell":
         for merged_range in ws.merged_cells.ranges:
@@ -1162,7 +1174,7 @@ def populate_workbook(
     # add separate sheet for NDS (exposure limit) from section 8.1
     nds_ws = wb.create_sheet(title="NDS")
     # use extracted NDS text directly
-    nds_value = data.nds or ""
+    nds_value = _clean_xml(data.nds or "")
     nds_ws["A1"] = nds_value
     ensure_visible_style(nds_ws["A1"])
 
