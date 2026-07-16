@@ -5,3 +5,9 @@ enableXsrfProtection = false
 
 [browser]
 gatherUsageStats = false
+
+[client]
+# Nigdy nie pokazuj użytkownikowi tracebacków ani technicznych błędów
+# (np. komunikatów z API Anthropic). Szczegóły trafiają tylko do logów serwera.
+showErrorDetails = "none"
+toolbarMode = "minimal"

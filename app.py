@@ -111,18 +111,15 @@ if st.button("Generuj instrukcje"):
                 temp_images_dir=TEMP_IMAGES_DIR,
             )
             generated_files.append(output_path)
-        except Exception as exc:  # ukryj szczegół techniczny przed użytkownikiem
+        except Exception:  # ukryj szczegół techniczny przed użytkownikiem
             errors += 1
-            # Pełny błąd trafia do logów serwera — administrator zobaczy szczegóły.
+            # Pełny błąd trafia WYŁĄCZNIE do logów serwera (dla administratora).
+            # Użytkownik nigdy nie widzi tracebacku ani komunikatów z API.
             traceback.print_exc()
             st.error(
                 f"Nie udało się przetworzyć pliku {pdf_path.name}. "
                 "Skontaktuj się z administratorem aplikacji."
             )
-            # Administrator widzi szczegół techniczny bez zaglądania do logów.
-            if _is_admin:
-                with st.expander(f"Szczegóły techniczne ({pdf_path.name})"):
-                    st.exception(exc)
         progress.progress((i + 1) / total, text=f"Przetworzono {pdf_path.name}")
 
     progress.empty()
