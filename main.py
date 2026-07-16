@@ -103,9 +103,20 @@ STORAGE_TEXT = (
     "od produktów spożywczych."
 )
 
-# Wg uwag: czcionka 11 w sekcjach „Czynności przed rozpoczęciem pracy" (A19:A26)
-# i „Czynności w czasie pracy" (C29:C34) — to statyczny tekst szablonu.
-SECTION_FONT11_CELLS = [f"A{r}" for r in range(19, 27)] + [f"C{r}" for r in range(29, 35)]
+# Wg uwag (10.07.2026): czcionka treści = 10 we wszystkich polach z danymi oraz
+# w sekcjach czynności (A19:A26 „przed rozpoczęciem", C29:C34 „w czasie pracy").
+CONTENT_FONT10_CELLS = (
+    [
+        "A11",                              # zagrożenia
+        "B16", "F16", "B17", "F17",         # środki ochrony
+        "A40", "A41", "A42", "A43", "A44",  # pierwsza pomoc
+        "A48", "A49", "A50",                # pożar
+        "A51",                              # uwolnienie do środowiska
+        "A54", "A55",                       # postępowanie / magazynowanie
+    ]
+    + [f"A{r}" for r in range(19, 27)]
+    + [f"C{r}" for r in range(29, 35)]
+)
 
 
 GHS_LABELS = {
@@ -883,19 +894,29 @@ def _get_merged_parent_value(ws, address: str) -> str | None:
     return None
 
 
+def _merged_parent_cell(ws, address: str):
+    for merged_range in ws.merged_cells.ranges:
+        if address in merged_range:
+            return ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+    return None
+
+
 def _is_bold(cell) -> bool:
     return bool(cell.font and cell.font.bold)
+
+
+CONTENT_FONT_SIZE = 10   # wg uwag: czcionka treści (dane + nagłówki pól) = 10
 
 
 def _rich_append(existing: str | None, new: str) -> CellRichText:
     parts: list[TextBlock] = []
     if existing:
-        header_font = InlineFont(b=True)
+        header_font = InlineFont(b=True, sz=CONTENT_FONT_SIZE)
         header_font.rFont = "Arial"
         parts.append(TextBlock(header_font, existing))
     if new:
         prefix = "\n" if existing else ""
-        body_font = InlineFont(b=False)
+        body_font = InlineFont(b=False, sz=CONTENT_FONT_SIZE)
         body_font.rFont = "Arial"
         parts.append(TextBlock(body_font, prefix + new))
     return CellRichText(*parts)
@@ -943,10 +964,6 @@ def ensure_visible_style(cell) -> None:
         alignment.horizontal = alignment.horizontal or "left"
         alignment.vertical = "top"
     cell.alignment = alignment
-    if cell.coordinate in {"C29", "C30", "C31", "C32", "C33", "C34"}:
-        font = copy(cell.font)
-        font.size = 9
-        cell.font = font
 
 
 _AUTOFIT_LINE_PT = 12.6        # ~jedna linia tekstu Arial 10 pt
@@ -1104,15 +1121,6 @@ def populate_workbook(
     wb = load_workbook(output_path)
     ws = wb[wb.sheetnames[0]]
 
-    # Czcionka 11 w sekcjach czynności (tekst statyczny szablonu) — wg uwag.
-    for addr in SECTION_FONT11_CELLS:
-        cell = ws[addr]
-        if cell.__class__.__name__ == "MergedCell":
-            continue
-        section_font = copy(cell.font)
-        section_font.size = 11
-        cell.font = section_font
-
     written: list[str] = []
 
     def put(key: str, value: str, append: bool = False) -> None:
@@ -1131,8 +1139,12 @@ def populate_workbook(
     put("respiratory_protection", data.respiratory_protection, append=True)
     put("skin_protection", data.skin_protection, append=True)
     put("eye_protection", data.eye_protection, append=True)
-    # A40 „Uwagi ogólne" — stały tekst, BEZ danych z karty (wg uwag recenzenta).
-    put("first_aid_general", FIRST_AID_GENERAL_TEXT, append=True)
+    # A40 „Uwagi ogólne": stały tekst, a POD nim uwagi ogólne z karty (pkt 4.1
+    # „Ogólne / Ochrona osób udzielających pierwszej pomocy"), jeśli są.
+    first_aid_general_value = FIRST_AID_GENERAL_TEXT
+    if (data.first_aid_general or "").strip():
+        first_aid_general_value += "\n" + data.first_aid_general.strip()
+    put("first_aid_general", first_aid_general_value, append=True)
     put("first_aid_inhalation", data.first_aid_inhalation, append=True)
     put("first_aid_skin", data.first_aid_skin, append=True)
     put("first_aid_eyes", data.first_aid_eyes, append=True)
@@ -1141,9 +1153,27 @@ def populate_workbook(
     put("fire_suitable", data.fire_suitable, append=True)
     put("fire_unsuitable", data.fire_unsuitable, append=True)
     put("environmental_release", data.environmental_release, append=True)
-    # A54/A55 — stałe formułki (postępowanie z produktem, magazynowanie).
-    put("handling_1", HANDLING_TEXT, append=True)
-    put("storage_1", STORAGE_TEXT, append=True)
+    # A54/A55: stały tekst zawsze na górze, a POD nim dane z karty
+    # (7.1 — postępowanie, 7.2 — magazynowanie).
+    handling_value = HANDLING_TEXT
+    if data.handling:
+        handling_value += "\n" + "\n".join(data.handling)
+    put("handling_1", handling_value, append=True)
+    storage_value = STORAGE_TEXT
+    if data.storage:
+        storage_value += "\n" + "\n".join(data.storage)
+    put("storage_1", storage_value, append=True)
+
+    # Czcionka 10 w polach treści (dane + nagłówki pól) — wg uwag 10.07.2026.
+    for addr in CONTENT_FONT10_CELLS:
+        cell = ws[addr]
+        if cell.__class__.__name__ == "MergedCell":
+            cell = _merged_parent_cell(ws, addr) or cell
+        if cell.__class__.__name__ == "MergedCell":
+            continue
+        content_font = copy(cell.font)
+        content_font.size = CONTENT_FONT_SIZE
+        cell.font = content_font
 
     ws._images = []
     static_assets = resolve_static_assets(assets_dir=assets_dir, temp_images_dir=temp_images_dir)

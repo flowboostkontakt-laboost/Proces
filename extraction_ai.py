@@ -113,7 +113,13 @@ _PROPS: dict[str, dict] = {
     },
     "first_aid_general": {
         "type": "string",
-        "description": "Sekcja 4.2 — najważniejsze ostre i opóźnione objawy / uwagi ogólne.",
+        "description": (
+            "Sekcja 4.1 — uwagi OGOLNE pierwszej pomocy: zapisy z kategorii "
+            "Uwagi ogolne / Zalecenia ogolne / Ogolne oraz Ochrona osob "
+            "udzielajacych pierwszej pomocy, jesli wystepuja. NIE przepisuj tu "
+            "objawow z sekcji 4.2 ani porad per droga narazenia (wdychanie, "
+            "skora, oczy, polkniecie — te ida do osobnych pol)."
+        ),
     },
     "fire_suitable": {
         "type": "string",
